@@ -37,7 +37,7 @@
  * Private types/enumerations/variables
  ****************************************************************************/
 
-#define TICKRATE_HZ (10)	/* 10 ticks per second */
+#define TICKRATE_HZ (1000)	/* 10 ticks per second */
 
 /*****************************************************************************
  * Public types/enumerations/variables
@@ -58,11 +58,26 @@
 void SysTick_Handler(void)
 {
 	static int systick_counter;
-
 	systick_counter++;
 
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, systick_counter%2==0 );
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, systick_counter%2==0 );
+}
 
+static uint32_t pulsetrain[] = {300,600};
+
+void SCT_IRQHandler (void)
+{
+	static uint32_t pulse;
+
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, 1 );
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, 0 );
+
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse%2]);
+	pulse++;
+
+
+	/* Clear the SCT Event 0 Interrupt */
+	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
 }
 
 
@@ -89,47 +104,45 @@ int main(void)
 
 	/* Initialize GPIO */
 	Chip_GPIO_Init(LPC_GPIO_PORT);
-
 	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, true);
-	//Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, SCT_PWM_PIN_LED);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, SCT_PWM_PIN_LED, true);
 
-//#ifdef FALSE
-	/* Initialize the SCT as PWM and set frequency */
-	Chip_SCTPWM_Init(SCT_PWM);
-	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
-
-	/* Enable SWM clock before altering SWM */
-	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	/* Connect SCT output 0 to LED pin PIO7, SCT output 1 to PIO17 */
-	//Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 1);
-	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
-	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
-
-	/* Use SCT0_OUT1 pin */
-	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_OUT, SCT_PWM_PIN_OUT);
-	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
-
-	/* Start with 50% duty cycle */
-	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_OUT, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
-	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_LED, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
-	Chip_SCTPWM_Start(SCT_PWM);
-//#endif
 
 	/* Initialize the SCT clock and reset the SCT */
-	//Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SCT);
-	//Chip_SYSCTL_PeriphReset(RESET_SCT);
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SCT);
+	Chip_SYSCTL_PeriphReset(RESET_SCT);
+
 	/* Configure the SCT counter as a unified (32 bit) counter using the bus clock */
-	//Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_CLKMODE_BUSCLK);
+	Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_CLKMODE_BUSCLK);
+
+	/* The match/capture REGMODE defaults to match mode */
+	/* No REGMODE changes are needed for this program   */
+
+	/* Set the match count for match register 0 */
+	Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, SystemCoreClock / TICKRATE_HZ);
+
+	/* Set the match reload value for match reload register 0*/
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, SystemCoreClock / TICKRATE_HZ);
+
+	/* Event 0 only happens on a match condition */
+	LPC_SCT->EV[0].CTRL = (1 << 12);
+
+	/* Event 0 only happens in state 0 */
+	LPC_SCT->EV[0].STATE = 0x00000001;
+
+	/* Event 0 is used as the counter limit */
+	LPC_SCT->LIMIT_U = 0x00000001;
+
+	/* Enable flag to request an interrupt for Event 0 */
+	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
+
+	/* Enable the interrupt for the SCT */
+	NVIC_EnableIRQ(SCT_IRQn);
+
+	/* Start the SCT counter by clearing Halt_L in the SCT control register */
+	Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L);
 
 
-
-	// Set PIO0_12 to output
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, false);
-
-	//Board_LED_Set(0, false);
 
 	/* Enable SysTick Timer */
 	SysTick_Config(SystemCoreClock / TICKRATE_HZ);
