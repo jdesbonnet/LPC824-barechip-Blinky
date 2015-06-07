@@ -63,23 +63,27 @@ void SysTick_Handler(void)
 	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, systick_counter%2==0 );
 }
 
-static uint32_t pulsetrain[] = {300,600};
+// Pulse rain in pairs of cycle length, duty
+static uint32_t pulsetrain[] = {1000,500,
+								1000,500,
+								1010,505,
+								1000,500,
+								100000,1};
 
-void SCT_IRQHandler (void)
+/**
+ * @brief	Handle interrupt from State Configurable Timer
+ * @return	Nothing
+ */
+void SCT_IRQHandler(void)
 {
 	static uint32_t pulse;
 
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, 1 );
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, 0 );
-
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse%2]);
-	pulse++;
-
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 10]);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 10]);
 
 	/* Clear the SCT Event 0 Interrupt */
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
 }
-
 
 #define SCT_PWM            LPC_SCT
 #define SCT_PWM_PIN_OUT    1		/* COUT1 Generate square wave */
@@ -107,31 +111,23 @@ int main(void)
 	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, true);
 
+	/* Initialize the SCT as PWM and set frequency */
+	Chip_SCTPWM_Init(SCT_PWM);
+	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
 
-	/* Initialize the SCT clock and reset the SCT */
-	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SCT);
-	Chip_SYSCTL_PeriphReset(RESET_SCT);
+	/* Enable SWM clock before altering SWM */
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	//Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 1);
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
-	/* Configure the SCT counter as a unified (32 bit) counter using the bus clock */
-	Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_CLKMODE_BUSCLK);
+	/* Use SCT0_OUT1 pin */
+	//Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_OUT, SCT_PWM_PIN_OUT);
+	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
 
-	/* The match/capture REGMODE defaults to match mode */
-	/* No REGMODE changes are needed for this program   */
-
-	/* Set the match count for match register 0 */
-	Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, SystemCoreClock / TICKRATE_HZ);
-
-	/* Set the match reload value for match reload register 0*/
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, SystemCoreClock / TICKRATE_HZ);
-
-	/* Event 0 only happens on a match condition */
-	LPC_SCT->EV[0].CTRL = (1 << 12);
-
-	/* Event 0 only happens in state 0 */
-	LPC_SCT->EV[0].STATE = 0x00000001;
-
-	/* Event 0 is used as the counter limit */
-	LPC_SCT->LIMIT_U = 0x00000001;
+	/* Start with 50% duty cycle */
+	//Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_OUT, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
+	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_LED, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
 
 	/* Enable flag to request an interrupt for Event 0 */
 	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
@@ -139,9 +135,7 @@ int main(void)
 	/* Enable the interrupt for the SCT */
 	NVIC_EnableIRQ(SCT_IRQn);
 
-	/* Start the SCT counter by clearing Halt_L in the SCT control register */
-	Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L);
-
+	Chip_SCTPWM_Start(SCT_PWM);
 
 
 	/* Enable SysTick Timer */
