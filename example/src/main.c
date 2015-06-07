@@ -65,6 +65,22 @@ void SysTick_Handler(void)
 
 }
 
+static uint32_t pulsetrain[] = {1200,200,12000,400,100000,1};
+
+/**
+ * @brief	Handle interrupt from State Configurable Timer
+ * @return	Nothing
+ */
+void SCT_IRQHandler(void)
+{
+	static uint32_t pulse;
+
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 6]);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 6]);
+
+	/* Clear the SCT Event 0 Interrupt */
+	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
+}
 
 #define SCT_PWM            LPC_SCT
 #define SCT_PWM_PIN_OUT    1		/* COUT1 Generate square wave */
@@ -102,34 +118,27 @@ int main(void)
 
 	/* Enable SWM clock before altering SWM */
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	/* Connect SCT output 0 to LED pin PIO7, SCT output 1 to PIO17 */
 	//Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 1);
 	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 	/* Use SCT0_OUT1 pin */
-	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_OUT, SCT_PWM_PIN_OUT);
+	//Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_OUT, SCT_PWM_PIN_OUT);
 	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
 
 	/* Start with 50% duty cycle */
-	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_OUT, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
+	//Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_OUT, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
 	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_LED, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
+
+	/* Enable flag to request an interrupt for Event 0 */
+	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
+
+	/* Enable the interrupt for the SCT */
+	NVIC_EnableIRQ(SCT_IRQn);
+
+
 	Chip_SCTPWM_Start(SCT_PWM);
-//#endif
 
-	/* Initialize the SCT clock and reset the SCT */
-	//Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SCT);
-	//Chip_SYSCTL_PeriphReset(RESET_SCT);
-	/* Configure the SCT counter as a unified (32 bit) counter using the bus clock */
-	//Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_CLKMODE_BUSCLK);
-
-
-
-	// Set PIO0_12 to output
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, false);
-
-	//Board_LED_Set(0, false);
 
 	/* Enable SysTick Timer */
 	SysTick_Config(SystemCoreClock / TICKRATE_HZ);
