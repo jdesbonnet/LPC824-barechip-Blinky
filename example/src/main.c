@@ -78,6 +78,7 @@ void SCT_IRQHandler(void)
 {
 	static uint32_t pulse;
 
+	// Setup next pulse in pulsetrain
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 10]);
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 10]);
 
@@ -85,10 +86,39 @@ void SCT_IRQHandler(void)
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
 }
 
+
+static bool sequenceComplete, thresholdCrossed;
+
+#define BOARD_ADC_CH 0
+
+/**
+ * @brief	Handle interrupt from ADC sequencer A
+ * @return	Nothing
+ */
+void ADC_SEQA_IRQHandler(void)
+{
+	uint32_t pending;
+
+	/* Get pending interrupts */
+	pending = Chip_ADC_GetFlags(LPC_ADC);
+
+	/* Sequence A completion interrupt */
+	if (pending & ADC_FLAGS_SEQA_INT_MASK) {
+		sequenceComplete = true;
+	}
+
+	/* Threshold crossing interrupt on ADC input channel */
+	if (pending & ADC_FLAGS_THCMP_MASK(BOARD_ADC_CH)) {
+		thresholdCrossed = true;
+	}
+
+	/* Clear any pending interrupts */
+	Chip_ADC_ClearFlags(LPC_ADC, pending);
+}
+
+
 #define SCT_PWM            LPC_SCT
-#define SCT_PWM_PIN_OUT    1		/* COUT1 Generate square wave */
 #define SCT_PWM_PIN_LED    0		/* COUT0 [index 2] Controls LED */
-#define SCT_PWM_OUT        1		/* Index of OUT PWM */
 #define SCT_PWM_LED        2		/* Index of LED PWM */
 #define SCT_PWM_RATE   10000		/* PWM frequency 10 KHz */
 
@@ -115,14 +145,11 @@ int main(void)
 	Chip_SCTPWM_Init(SCT_PWM);
 	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
 
-	/* Enable SWM clock before altering SWM */
+	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	//Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 1);
 	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
-	/* Use SCT0_OUT1 pin */
-	//Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_OUT, SCT_PWM_PIN_OUT);
 	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
 
 	/* Start with 50% duty cycle */
@@ -135,6 +162,57 @@ int main(void)
 	/* Enable the interrupt for the SCT */
 	NVIC_EnableIRQ(SCT_IRQn);
 
+
+	//
+	// ADC
+	//
+
+	Chip_ADC_Init(LPC_ADC, 0);
+
+	/* Need to do a calibration after initialization and trim */
+	Chip_ADC_StartCalibration(LPC_ADC);
+	while (!(Chip_ADC_IsCalibrationDone(LPC_ADC))) {}
+
+	// Sampling clock rate (not conversion rate). A fully accurate conversion
+	// requires 25 ADC clock cycles.
+	Chip_ADC_SetClockRate(LPC_ADC, 160000 * 25);
+
+
+	/* Setup a sequencer to do the following:
+	   Perform ADC conversion of ADC channels 0 only */
+	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
+							(ADC_SEQ_CTRL_CHANSEL(0)
+							| ADC_SEQ_CTRL_HWTRIG_SCT_OUT0
+							//| ADC_SEQ_CTRL_HWTRIG_ARM_TXEV
+							//| ADC_SEQ_CTRL_MODE_EOS
+							)
+									);
+
+	/* Enable the clock to the Switch Matrix */
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	/* Configure the SWM for P0-6 as the input for the ADC1 */
+	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC1);
+	/* Disable the clock to the Switch Matrix to save power */
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
+	/* Clear all pending interrupts */
+	Chip_ADC_ClearFlags(LPC_ADC, Chip_ADC_GetFlags(LPC_ADC));
+
+	/* Enable ADC overrun and sequence A completion interrupts */
+	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
+								| ADC_INTEN_OVRRUN_ENABLE));
+
+	/* Enable ADC NVIC interrupt */
+	NVIC_EnableIRQ(ADC_SEQA_IRQn);
+
+	/* Enable sequencer */
+	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
+
+
+
+
+
+	// Start pulse train
 	Chip_SCTPWM_Start(SCT_PWM);
 
 
