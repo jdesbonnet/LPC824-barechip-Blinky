@@ -65,7 +65,12 @@ void SysTick_Handler(void)
 
 }
 
-static uint32_t pulsetrain[] = {1200,200,12000,400,100000,1};
+// Pulse rain in pairs of cycle length, duty
+static uint32_t pulsetrain[] = {1000,500,
+								1000,500,
+								1010,505,
+								1000,500,
+								100000,1};
 
 /**
  * @brief	Handle interrupt from State Configurable Timer
@@ -75,8 +80,8 @@ void SCT_IRQHandler(void)
 {
 	static uint32_t pulse;
 
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 6]);
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 6]);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 10]);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 10]);
 
 	/* Clear the SCT Event 0 Interrupt */
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
@@ -108,10 +113,7 @@ int main(void)
 
 	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, true);
-	//Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, SCT_PWM_PIN_LED);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, SCT_PWM_PIN_LED, true);
 
-//#ifdef FALSE
 	/* Initialize the SCT as PWM and set frequency */
 	Chip_SCTPWM_Init(SCT_PWM);
 	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
