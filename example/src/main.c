@@ -65,6 +65,15 @@ void SysTick_Handler(void)
 
 }
 
+
+#define SCT_PWM            LPC_SCT
+#define SCT_PWM_PIN_OUT    1		/* COUT1 Generate square wave */
+#define SCT_PWM_PIN_LED    0		/* COUT0 [index 2] Controls LED */
+#define SCT_PWM_OUT        1		/* Index of OUT PWM */
+#define SCT_PWM_LED        2		/* Index of LED PWM */
+#define SCT_PWM_RATE   10000		/* PWM frequency 10 KHz */
+
+
 /**
  * @brief	main routine for blinky example
  * @return	Function should not exit.
@@ -78,13 +87,46 @@ int main(void)
 	// clock without any PLL. This is good for initial experiments.
 	//SystemInit();
 
-
 	/* Initialize GPIO */
 	Chip_GPIO_Init(LPC_GPIO_PORT);
 
+	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, true);
+	//Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, SCT_PWM_PIN_LED);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, SCT_PWM_PIN_LED, true);
+
+//#ifdef FALSE
+	/* Initialize the SCT as PWM and set frequency */
+	Chip_SCTPWM_Init(SCT_PWM);
+	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
+
+	/* Enable SWM clock before altering SWM */
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	/* Connect SCT output 0 to LED pin PIO7, SCT output 1 to PIO17 */
+	//Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 1);
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
+	/* Use SCT0_OUT1 pin */
+	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_OUT, SCT_PWM_PIN_OUT);
+	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
+
+	/* Start with 50% duty cycle */
+	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_OUT, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
+	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_LED, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
+	Chip_SCTPWM_Start(SCT_PWM);
+//#endif
+
+	/* Initialize the SCT clock and reset the SCT */
+	//Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SCT);
+	//Chip_SYSCTL_PeriphReset(RESET_SCT);
+	/* Configure the SCT counter as a unified (32 bit) counter using the bus clock */
+	//Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_CLKMODE_BUSCLK);
+
+
+
 	// Set PIO0_12 to output
 	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
-
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, false);
 
 	//Board_LED_Set(0, false);
