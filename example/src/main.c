@@ -64,10 +64,13 @@ void SysTick_Handler(void)
 }
 
 // Pulse rain in pairs of cycle length, duty
-static uint32_t pulsetrain[] = {1000,500,
-								1000,500,
-								1010,505,
-								1000,500,
+static uint32_t pulsetrain[] = {500,250,
+								500,250,
+								600,300,
+								480,200,
+								500,250,
+								600,250,
+								500,250,
 								100000,1};
 
 /**
@@ -78,9 +81,13 @@ void SCT_IRQHandler(void)
 {
 	static uint32_t pulse;
 
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+
+
 	// Setup next pulse in pulsetrain
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 10]);
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 10]);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 16]);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 16]);
 
 	/* Clear the SCT Event 0 Interrupt */
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
@@ -99,6 +106,11 @@ void ADC_SEQA_IRQHandler(void)
 {
 	uint32_t pending;
 
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+
 	/* Get pending interrupts */
 	pending = Chip_ADC_GetFlags(LPC_ADC);
 
@@ -114,6 +126,13 @@ void ADC_SEQA_IRQHandler(void)
 
 	/* Clear any pending interrupts */
 	Chip_ADC_ClearFlags(LPC_ADC, pending);
+}
+
+void ADC_OVR_IRQHandler(void) {
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 }
 
 
@@ -141,6 +160,10 @@ int main(void)
 	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 15);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, true);
 
+	// For debugging
+	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 14);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+
 	/* Initialize the SCT as PWM and set frequency */
 	Chip_SCTPWM_Init(SCT_PWM);
 	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
@@ -153,8 +176,9 @@ int main(void)
 	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
 
 	/* Start with 50% duty cycle */
-	//Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_OUT, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
-	Chip_SCTPWM_SetDutyCycle(SCT_PWM, SCT_PWM_LED, Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
+	Chip_SCTPWM_SetDutyCycle(SCT_PWM,
+			SCT_PWM_LED,
+			Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
 
 	/* Enable flag to request an interrupt for Event 0 */
 	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
@@ -202,8 +226,10 @@ int main(void)
 	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
 								| ADC_INTEN_OVRRUN_ENABLE));
 
+
 	/* Enable ADC NVIC interrupt */
 	NVIC_EnableIRQ(ADC_SEQA_IRQn);
+	NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
 	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
