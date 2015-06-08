@@ -51,19 +51,22 @@
  * Public functions
  ****************************************************************************/
 
+static volatile uint32_t systick_counter=0;
+
 /**
  * @brief	Handle interrupt from SysTick timer
  * @return	Nothing
  */
 void SysTick_Handler(void)
 {
-	static int systick_counter;
+	//static int systick_counter;
 	systick_counter++;
 
 	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, systick_counter%2==0 );
 }
 
 // Pulse rain in pairs of cycle length, duty
+#define NUM_PULSE 3
 static uint32_t pulsetrain[] = {500,250,
 								500,250,
 								600,300,
@@ -71,7 +74,10 @@ static uint32_t pulsetrain[] = {500,250,
 								500,250,
 								600,250,
 								500,250,
-								100000,1};
+								100000,1
+};
+
+volatile int32_t pulse=-1;
 
 /**
  * @brief	Handle interrupt from State Configurable Timer
@@ -79,24 +85,29 @@ static uint32_t pulsetrain[] = {500,250,
  */
 void SCT_IRQHandler(void)
 {
-	static uint32_t pulse;
 
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-
+//	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+//	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 
 	// Setup next pulse in pulsetrain
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++ % 16]);
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++ % 16]);
+	if (pulse < (NUM_PULSE*2-2) ) {
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++]);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++]);
+	} else {
+		// Stop the SCT if pulse train complete.
+		Chip_SCTPWM_Stop(LPC_SCT);
+		// Prepare for the next pulse train
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[0]);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[1]);
+		pulse = -1;
+	}
 
 	/* Clear the SCT Event 0 Interrupt */
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
 }
 
-
-static bool sequenceComplete, thresholdCrossed;
-
-#define BOARD_ADC_CH 0
 
 /**
  * @brief	Handle interrupt from ADC sequencer A
@@ -106,8 +117,8 @@ void ADC_SEQA_IRQHandler(void)
 {
 	uint32_t pending;
 
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 
 
 	/* Get pending interrupts */
@@ -115,13 +126,16 @@ void ADC_SEQA_IRQHandler(void)
 
 	/* Sequence A completion interrupt */
 	if (pending & ADC_FLAGS_SEQA_INT_MASK) {
-		sequenceComplete = true;
+		//sequenceComplete = true;
 	}
 
 	/* Clear any pending interrupts */
 	Chip_ADC_ClearFlags(LPC_ADC, pending);
 }
 
+/**
+ * @brief ADC overflow interrupt handler.
+ */
 void ADC_OVR_IRQHandler(void) {
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
@@ -129,7 +143,7 @@ void ADC_OVR_IRQHandler(void) {
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 }
 
-
+#ifdef ENABLE_MRT
 /* Setup a timer for a periodic (repeat mode) rate */
 static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
 {
@@ -149,7 +163,7 @@ static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
 	Chip_MRT_IntClear(pMRT);
 	Chip_MRT_SetEnabled(pMRT);
 }
-
+#endif
 
 #define SCT_PWM        LPC_SCT
 #define SCT_PWM_RATE   1000		/* PWM frequency 10 KHz */
@@ -207,7 +221,7 @@ int main(void)
 	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
 
 	/* Enable the interrupt for the SCT */
-	//NVIC_EnableIRQ(SCT_IRQn);
+	NVIC_EnableIRQ(SCT_IRQn);
 
 	// Start pulse train
 	Chip_SCTPWM_Start(SCT_PWM);
@@ -225,7 +239,7 @@ int main(void)
 
 	// Sampling clock rate (not conversion rate). A fully accurate conversion
 	// requires 25 ADC clock cycles.
-	Chip_ADC_SetClockRate(LPC_ADC, 160000 * 25);
+	Chip_ADC_SetClockRate(LPC_ADC, 500000 * 25);
 
 
 	/* Setup a sequencer to do the following:
@@ -247,7 +261,8 @@ int main(void)
 
 	/* Enable ADC overrun and sequence A completion interrupts */
 	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
-								| ADC_INTEN_OVRRUN_ENABLE));
+								//| ADC_INTEN_OVRRUN_ENABLE
+								));
 
 
 	/* Enable ADC NVIC interrupt */
@@ -285,6 +300,12 @@ int main(void)
 	/* Loop forever */
 	while (1) {
 		__WFI();
+
+		// Repeat pulse every 100ms
+		if (pulse == -1 && (systick_counter%100)==0) {
+			pulse = 2;
+			Chip_SCTPWM_Start(SCT_PWM);
+		}
 	}
 }
 
