@@ -151,10 +151,8 @@ static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
 }
 
 
-#define SCT_PWM            LPC_SCT
-#define SCT_PWM_PIN_LED    0		/* COUT0 [index 2] Controls LED */
-#define SCT_PWM_LED        2		/* Index of LED PWM */
-#define SCT_PWM_RATE   10000		/* PWM frequency 10 KHz */
+#define SCT_PWM        LPC_SCT
+#define SCT_PWM_RATE   1000		/* PWM frequency 10 KHz */
 
 
 /**
@@ -180,7 +178,7 @@ int main(void)
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 
 
-//#define ENABLE_PWM
+#define ENABLE_PWM
 
 #ifdef ENABLE_PWM
 	/* Initialize the SCT as PWM and set frequency */
@@ -254,7 +252,7 @@ int main(void)
 
 	/* Enable ADC NVIC interrupt */
 	NVIC_EnableIRQ(ADC_SEQA_IRQn);
-	NVIC_EnableIRQ(ADC_OVR_IRQn);
+	//NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
 	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
@@ -264,7 +262,7 @@ int main(void)
 	//
 	// Multi Rate Timer (MRT)
 	//
-
+#ifdef ENABLE_MRT
 	/* MRT Initialization and disable all timers */
 	Chip_MRT_Init();
 	int i;
@@ -278,6 +276,7 @@ int main(void)
 	/* Enable timers 0 and 1 in repeat mode with different rates */
 	setupMRT(0, MRT_MODE_REPEAT, 500);
 	//setupMRT(1, MRT_MODE_REPEAT, 40000);/* 4Hz rate */
+#endif
 
 
 	/* Enable SysTick Timer */
