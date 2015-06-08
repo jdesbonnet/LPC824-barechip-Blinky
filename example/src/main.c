@@ -108,8 +108,7 @@ void ADC_SEQA_IRQHandler(void)
 
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+
 
 	/* Get pending interrupts */
 	pending = Chip_ADC_GetFlags(LPC_ADC);
@@ -187,6 +186,7 @@ int main(void)
 
 	/* Initialize the SCT as PWM and set frequency */
 	Chip_SCTPWM_Init(SCT_PWM);
+	// User MATCH0 to determine PWM frequency
 	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
 
 	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
@@ -194,11 +194,11 @@ int main(void)
 	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
-	Chip_SCTPWM_SetOutPin(SCT_PWM, SCT_PWM_LED, SCT_PWM_PIN_LED);
+	Chip_SCTPWM_SetOutPin(SCT_PWM, 2, 0); // 2=PWM ch 2; 0 = OUT0?
 
 	/* Start with 50% duty cycle */
 	Chip_SCTPWM_SetDutyCycle(SCT_PWM,
-			SCT_PWM_LED,
+			2,
 			Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
 
 	/* Enable flag to request an interrupt for Event 0 */
@@ -228,7 +228,8 @@ int main(void)
 	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
 							(ADC_SEQ_CTRL_CHANSEL(0)
 							//| ADC_SEQ_CTRL_HWTRIG_SCT_OUT0
-							| ADC_SEQ_CTRL_HWTRIG_CT16B0_MAT0
+							//| ADC_SEQ_CTRL_HWTRIG_CT16B0_MAT0
+							| (3<<12) // SCT0_OUT3
 							//| ADC_SEQ_CTRL_HWTRIG_ARM_TXEV
 							//| ADC_SEQ_CTRL_MODE_EOS
 							)
@@ -254,7 +255,7 @@ int main(void)
 	NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
-	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
+	//Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
 
 
 
@@ -273,8 +274,9 @@ int main(void)
 	NVIC_EnableIRQ(MRT_IRQn);
 
 	/* Enable timers 0 and 1 in repeat mode with different rates */
-	setupMRT(0, MRT_MODE_REPEAT, 5000);
+	setupMRT(0, MRT_MODE_REPEAT, 500);
 	//setupMRT(1, MRT_MODE_REPEAT, 40000);/* 4Hz rate */
+
 
 
 	// Start pulse train
