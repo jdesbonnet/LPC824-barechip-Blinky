@@ -118,11 +118,6 @@ void ADC_SEQA_IRQHandler(void)
 		sequenceComplete = true;
 	}
 
-	/* Threshold crossing interrupt on ADC input channel */
-	if (pending & ADC_FLAGS_THCMP_MASK(BOARD_ADC_CH)) {
-		thresholdCrossed = true;
-	}
-
 	/* Clear any pending interrupts */
 	Chip_ADC_ClearFlags(LPC_ADC, pending);
 }
@@ -184,6 +179,10 @@ int main(void)
 	Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 14);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 
+
+//#define ENABLE_PWM
+
+#ifdef ENABLE_PWM
 	/* Initialize the SCT as PWM and set frequency */
 	Chip_SCTPWM_Init(SCT_PWM);
 	// User MATCH0 to determine PWM frequency
@@ -191,12 +190,17 @@ int main(void)
 
 	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT3_O, 15); // was OUT0_O
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
-	Chip_SCTPWM_SetOutPin(SCT_PWM, 2, 0); // 2=PWM ch 2; 0 = OUT0?
+	// SCT->EV[2] =
+	Chip_SCTPWM_SetOutPin(SCT_PWM,
+			2, // PWM channel
+			3 //  the output channel eg SCT_OUT3 (there are 6 in total)
+		);
 
 	/* Start with 50% duty cycle */
+	// MATCHREL[2] = rate
 	Chip_SCTPWM_SetDutyCycle(SCT_PWM,
 			2,
 			Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
@@ -205,8 +209,11 @@ int main(void)
 	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
 
 	/* Enable the interrupt for the SCT */
-	NVIC_EnableIRQ(SCT_IRQn);
+	//NVIC_EnableIRQ(SCT_IRQn);
 
+	// Start pulse train
+	Chip_SCTPWM_Start(SCT_PWM);
+#endif
 
 	//
 	// ADC
@@ -224,22 +231,17 @@ int main(void)
 
 
 	/* Setup a sequencer to do the following:
-	   Perform ADC conversion of ADC channels 0 only */
+	   Perform ADC conversion of ADC channel 3 only */
 	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
-							(ADC_SEQ_CTRL_CHANSEL(0)
-							//| ADC_SEQ_CTRL_HWTRIG_SCT_OUT0
-							//| ADC_SEQ_CTRL_HWTRIG_CT16B0_MAT0
-							| (3<<12) // SCT0_OUT3
-							//| ADC_SEQ_CTRL_HWTRIG_ARM_TXEV
-							//| ADC_SEQ_CTRL_MODE_EOS
+							(ADC_SEQ_CTRL_CHANSEL(3)
+							| (3<<12) // SCT0_OUT3 see UM10800 §21.3.3
+							| ADC_SEQ_CTRL_MODE_EOS
 							)
 									);
 
-	/* Enable the clock to the Switch Matrix */
+	/* Enable fixed pin ADC3 with SitchMatrix */
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	/* Configure the SWM for P0-6 as the input for the ADC1 */
-	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC1);
-	/* Disable the clock to the Switch Matrix to save power */
+	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC3);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 	/* Clear all pending interrupts */
@@ -255,7 +257,7 @@ int main(void)
 	NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
-	//Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
+	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
 
 
 
@@ -276,11 +278,6 @@ int main(void)
 	/* Enable timers 0 and 1 in repeat mode with different rates */
 	setupMRT(0, MRT_MODE_REPEAT, 500);
 	//setupMRT(1, MRT_MODE_REPEAT, 40000);/* 4Hz rate */
-
-
-
-	// Start pulse train
-	Chip_SCTPWM_Start(SCT_PWM);
 
 
 	/* Enable SysTick Timer */
