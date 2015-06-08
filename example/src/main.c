@@ -136,6 +136,27 @@ void ADC_OVR_IRQHandler(void) {
 }
 
 
+/* Setup a timer for a periodic (repeat mode) rate */
+static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
+{
+	LPC_MRT_CH_T *pMRT;
+
+	/* Get pointer to timer selected by ch */
+	pMRT = Chip_MRT_GetRegPtr(ch);
+
+	/* Setup timer with rate based on MRT clock */
+	Chip_MRT_SetInterval(pMRT, (Chip_Clock_GetSystemClockRate() / rate) |
+						 MRT_INTVAL_LOAD);
+
+	/* Timer mode */
+	Chip_MRT_SetMode(pMRT, mode);
+
+	/* Clear pending interrupt and enable timer */
+	Chip_MRT_IntClear(pMRT);
+	Chip_MRT_SetEnabled(pMRT);
+}
+
+
 #define SCT_PWM            LPC_SCT
 #define SCT_PWM_PIN_LED    0		/* COUT0 [index 2] Controls LED */
 #define SCT_PWM_LED        2		/* Index of LED PWM */
@@ -206,7 +227,8 @@ int main(void)
 	   Perform ADC conversion of ADC channels 0 only */
 	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
 							(ADC_SEQ_CTRL_CHANSEL(0)
-							| ADC_SEQ_CTRL_HWTRIG_SCT_OUT0
+							//| ADC_SEQ_CTRL_HWTRIG_SCT_OUT0
+							| ADC_SEQ_CTRL_HWTRIG_CT16B0_MAT0
 							//| ADC_SEQ_CTRL_HWTRIG_ARM_TXEV
 							//| ADC_SEQ_CTRL_MODE_EOS
 							)
@@ -236,6 +258,23 @@ int main(void)
 
 
 
+	//
+	// Multi Rate Timer (MRT)
+	//
+
+	/* MRT Initialization and disable all timers */
+	Chip_MRT_Init();
+	int i;
+	for (i = 0; i < 4; i++) {
+		Chip_MRT_SetDisabled(Chip_MRT_GetRegPtr(i));
+	}
+
+	/* Enable the interrupt for the MRT */
+	NVIC_EnableIRQ(MRT_IRQn);
+
+	/* Enable timers 0 and 1 in repeat mode with different rates */
+	setupMRT(0, MRT_MODE_REPEAT, 5000);
+	//setupMRT(1, MRT_MODE_REPEAT, 40000);/* 4Hz rate */
 
 
 	// Start pulse train
@@ -249,4 +288,27 @@ int main(void)
 	while (1) {
 		__WFI();
 	}
+}
+
+
+/**
+ * @brief	Handle interrupt from MRT
+ * @return	Nothing
+ */
+void MRT_IRQHandler(void)
+{
+	uint32_t int_pend;
+
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+
+	/* Get interrupt pending status for all timers */
+	int_pend = Chip_MRT_GetIntPending();
+	Chip_MRT_ClearIntPending(int_pend);
+
+	/* Channel 0 and 1 are periodic, toggle on either interrupt */
+	if (int_pend & (MRTn_INTFLAG(0) | MRTn_INTFLAG(1))) {
+
+	}
+
 }
