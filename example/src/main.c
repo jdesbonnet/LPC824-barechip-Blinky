@@ -59,25 +59,21 @@ static volatile uint32_t systick_counter=0;
  */
 void SysTick_Handler(void)
 {
-	//static int systick_counter;
 	systick_counter++;
-
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 15, systick_counter%2==0 );
 }
 
-// Pulse rain in pairs of cycle length, duty
-#define NUM_PULSE 3
-static uint32_t pulsetrain[] = {500,250,
-								500,250,
-								600,300,
-								480,200,
-								500,250,
-								600,250,
-								500,250,
-								100000,1
-};
 
-volatile int32_t pulse=-1;
+// Barker-11: +1 +1 +1 -1 -1 -1 +1 -1 -1 +1 -1
+// Encoded in binary: 111 0001 0010
+static uint32_t barker11 = 0x712;
+// Encoded with double cycles: 11 1111   0000 0011   0000 1100
+//static uint32_t barker11 = 0x3f030a;
+
+static volatile uint32_t barker_chip_bitmask=0;
+static volatile uint32_t barker_chip_index=0; // for debugging
+// 0: 0 degrees, 2: 180 degrees
+static volatile uint32_t modulation_phase_offset=0;
+static volatile uint32_t cycle_number;
 
 /**
  * @brief	Handle interrupt from State Configurable Timer
@@ -88,22 +84,33 @@ void SCT_IRQHandler(void)
 
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-//	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-//	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 
-	// Setup next pulse in pulsetrain
-	if (pulse < (NUM_PULSE*2-2) ) {
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[pulse++]);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[pulse++]);
-	} else {
-		// Stop the SCT if pulse train complete.
-		Chip_SCTPWM_Stop(LPC_SCT);
-		// Prepare for the next pulse train
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, pulsetrain[0]);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, pulsetrain[1]);
-		pulse = -1;
+	if (barker_chip_index<5) {
+	int i;
+	for (i = 1; i <= barker_chip_index; i++) {
+		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	}
 	}
 
+	//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
+
+	if (barker_chip_bitmask != 0) {
+		if (barker11 & barker_chip_bitmask) {
+			// a +1 chip encoded as N cycles in phase
+			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, modulation_phase_offset == 2 ? 900 : 600);
+			modulation_phase_offset = 0;
+		} else {
+			// a -1 chip encoded as N cycles 180 degrees phase
+			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, modulation_phase_offset == 0 ? 900 : 600);
+			modulation_phase_offset = 2;
+		}
+		barker_chip_bitmask >>= 1;
+	} else {
+		Chip_SCTPWM_Stop(LPC_SCT);
+	}
+
+	barker_chip_index++;
 	/* Clear the SCT Event 0 Interrupt */
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
 }
@@ -137,10 +144,10 @@ void ADC_SEQA_IRQHandler(void)
  * @brief ADC overflow interrupt handler.
  */
 void ADC_OVR_IRQHandler(void) {
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 }
 
 #ifdef ENABLE_MRT
@@ -192,11 +199,12 @@ int main(void)
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 
 
-#define ENABLE_PWM
+//#define ENABLE_PWM
 
 #ifdef ENABLE_PWM
-	/* Initialize the SCT as PWM and set frequency */
-	Chip_SCTPWM_Init(SCT_PWM);
+
+	Chip_SCT_Init(LPC_SCT);
+
 	// User MATCH0 to determine PWM frequency
 	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
 
@@ -224,9 +232,10 @@ int main(void)
 	NVIC_EnableIRQ(SCT_IRQn);
 
 	// Start pulse train
-	Chip_SCTPWM_Start(SCT_PWM);
+	//Chip_SCTPWM_Start(SCT_PWM);
 #endif
 
+#ifdef ENABLE_ADC
 	//
 	// ADC
 	//
@@ -267,11 +276,12 @@ int main(void)
 
 	/* Enable ADC NVIC interrupt */
 	NVIC_EnableIRQ(ADC_SEQA_IRQn);
-	//NVIC_EnableIRQ(ADC_OVR_IRQn);
+	NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
 	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
 
+#endif
 
 
 	//
@@ -297,14 +307,67 @@ int main(void)
 	/* Enable SysTick Timer */
 	SysTick_Config(SystemCoreClock / TICKRATE_HZ);
 
+
+	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT3_O, 15); // was OUT0_O
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
+	uint32_t start_time;
+	uint32_t t;
+
 	/* Loop forever */
 	while (1) {
 		__WFI();
 
 		// Repeat pulse every 100ms
-		if (pulse == -1 && (systick_counter%100)==0) {
-			pulse = 2;
-			Chip_SCTPWM_Start(SCT_PWM);
+		t = systick_counter;
+		if (barker_chip_bitmask == 0 && (t%100)==0 && t != start_time) {
+			start_time = t;
+			modulation_phase_offset = 0;
+			barker_chip_bitmask = 1<<10;
+
+			barker_chip_index=0;
+
+			// Setup SCT
+			Chip_SCT_Init(LPC_SCT);
+			/* Stop the SCT before configuration */
+			Chip_SCTPWM_Stop(LPC_SCT);
+			/* Set MATCH0 for max limit */
+			LPC_SCT->REGMODE_U = 0;
+			Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, 0);
+			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
+			LPC_SCT->EV[0].CTRL = 1 << 12;
+			LPC_SCT->EV[0].STATE = 1;
+
+			// SCT->EV[2] =
+			Chip_SCTPWM_SetOutPin(SCT_PWM,
+					2, // PWM channel
+					3 //  the output channel eg SCT_OUT3 (there are 6 in total)
+				);
+
+			/* Set SCT Counter to count 32-bits and reset to 0 after reaching MATCH0 */
+			Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L);
+			/* Enable flag to request an interrupt for Event 0 */
+			Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
+			/* Enable the interrupt for the SCT */
+			NVIC_EnableIRQ(SCT_IRQn);
+
+
+			//Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, 2000);
+			//Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_2, 300);
+			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 2000);
+			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
+
+			// Start SCT
+
+			int i;
+			for (i = 0; i < 10; i++) {
+				Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+				Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+			}
+
+			Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L | SCT_CTRL_HALT_H);
 		}
 	}
 }
