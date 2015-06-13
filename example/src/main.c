@@ -75,6 +75,11 @@ static const uint32_t phase_pattern = 0x00008208;
 
 static volatile int32_t cycle_number = -1;
 
+#define ADC_BUFFER_SIZE 4096
+static uint8_t adc_buffer[ADC_BUFFER_SIZE];
+static volatile uint8_t *adc_buffer_ptr;
+static volatile uint32_t adc_count;
+
 /**
  * @brief	Handle interrupt from State Configurable Timer
  * @return	Nothing
@@ -138,6 +143,13 @@ void ADC_SEQA_IRQHandler(void)
 	/* Sequence A completion interrupt */
 	if (pending & ADC_FLAGS_SEQA_INT_MASK) {
 		//sequenceComplete = true;
+	}
+
+	adc_buffer[adc_count++] = (Chip_ADC_GetDataReg(LPC_ADC,3)>>4) & 0xff;
+
+	if (adc_count == ADC_BUFFER_SIZE) {
+		//NVIC_DisableIRQ(ADC_SEQA_IRQn);
+		Chip_SCTPWM_Stop(LPC_SCT);
 	}
 
 	/* Clear any pending interrupts */
@@ -360,6 +372,9 @@ int main(void)
 			// Use dummy starter pulse to enter ISR to start pulse train
 			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 16);
 			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 8);
+
+			// Setup ADC stuff
+			adc_count = 0;
 
 			// Start SCT
 
