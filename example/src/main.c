@@ -114,8 +114,8 @@ void SCT_IRQHandler(void)
 	// the first entry into interrupt is due to starter pulse
 	if (cycle_number == num_cycles+2) {
 		//Chip_SCTPWM_Stop(LPC_SCT);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/8);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/8);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/6);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/6);
 		NVIC_DisableIRQ(SCT_IRQn);
 		cycle_number=-1;
 	}
@@ -201,6 +201,8 @@ int main(void)
 
 	SystemCoreClockUpdate();
 
+	//printf ("System clock rate: %d", Chip_Clock_GetSystemClockRate());
+
 	// If we don't call SystemInit() will use default 12MHz internal
 	// clock without any PLL. This is good for initial experiments.
 	//SystemInit();
@@ -266,7 +268,8 @@ int main(void)
 	// Sampling clock rate (not conversion rate). A fully accurate conversion
 	// requires 25 ADC clock cycles.
 	Chip_ADC_SetClockRate(LPC_ADC, 500000 * 25);
-
+	//Chip_ADC_SetClockRate(LPC_ADC, ADC_MAX_SAMPLE_RATE);
+	Chip_ADC_SetDivider(LPC_ADC,0);
 
 	/* Setup a sequencer to do the following:
 	   Perform ADC conversion of ADC channel 3 only */
