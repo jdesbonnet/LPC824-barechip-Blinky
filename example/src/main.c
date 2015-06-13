@@ -66,14 +66,14 @@ void SysTick_Handler(void)
 // Barker-11: +1 +1 +1 -1 -1 -1 +1 -1 -1 +1 -1
 // Encoded in binary: 111 0001 0010
 //static uint32_t barker11 = 0x712;
-// Encoded with double cycles: 11 1111   0000 0011   0000 1100
-static uint32_t barker11 = 0x3f030a;
+static const int num_cycles = 16;
+// This bit pattern determines on which cycle numbers a 180 degree phase
+// shift is introduced.
+// 0b0000 0000  1000 0000  1000 0000  1000 0000
+//static const uint8_t phase_pattern = 0x000029a0;
+static const uint32_t phase_pattern = 0x00008208;
 
-static volatile uint32_t barker_chip_bitmask=0;
-static volatile uint32_t barker_chip_index=0; // for debugging
-// 0: 0 degrees, 2: 180 degrees
-static volatile uint32_t modulation_phase_offset=0;
-static volatile uint32_t cycle_number;
+static volatile int32_t cycle_number = -1;
 
 /**
  * @brief	Handle interrupt from State Configurable Timer
@@ -82,35 +82,39 @@ static volatile uint32_t cycle_number;
 void SCT_IRQHandler(void)
 {
 
+#ifdef FALSE
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 
-	if (barker_chip_index<5) {
-	int i;
-	for (i = 1; i <= barker_chip_index; i++) {
-		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	}
-	}
-
-	//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
-
-	if (barker_chip_bitmask != 0) {
-		if (barker11 & barker_chip_bitmask) {
-			// a +1 chip encoded as N cycles in phase
-			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, modulation_phase_offset == 2 ? 900 : 600);
-			modulation_phase_offset = 0;
-		} else {
-			// a -1 chip encoded as N cycles 180 degrees phase
-			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, modulation_phase_offset == 0 ? 900 : 600);
-			modulation_phase_offset = 2;
+	if (cycle_number<5) {
+		int i;
+		for (i = 1; i <= cycle_number; i++) {
+			Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+			Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 		}
-		barker_chip_bitmask >>= 1;
+	}
+#endif
+
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
+
+	if (phase_pattern & (1<<cycle_number) ) {
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 900);
 	} else {
-		Chip_SCTPWM_Stop(LPC_SCT);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
 	}
 
-	barker_chip_index++;
+	cycle_number++;
+
+	// +2 because we are setting the RELOAD register, also because
+	// the first entry into interrupt is due to starter pulse
+	if (cycle_number == num_cycles+2) {
+		//Chip_SCTPWM_Stop(LPC_SCT);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/8);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/8);
+		NVIC_DisableIRQ(SCT_IRQn);
+		cycle_number=-1;
+	}
+
 	/* Clear the SCT Event 0 Interrupt */
 	Chip_SCT_ClearEventFlag(LPC_SCT, SCT_EVT_0);
 }
@@ -124,8 +128,8 @@ void ADC_SEQA_IRQHandler(void)
 {
 	uint32_t pending;
 
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 
 
 	/* Get pending interrupts */
@@ -235,6 +239,7 @@ int main(void)
 	//Chip_SCTPWM_Start(SCT_PWM);
 #endif
 
+#define ENABLE_ADC
 #ifdef ENABLE_ADC
 	//
 	// ADC
@@ -322,12 +327,9 @@ int main(void)
 
 		// Repeat pulse every 100ms
 		t = systick_counter;
-		if (barker_chip_bitmask == 0 && (t%100)==0 && t != start_time) {
+		if ( (cycle_number== -1) && ((t%100)==0) && (t!=start_time) ) {
 			start_time = t;
-			modulation_phase_offset = 0;
-			barker_chip_bitmask = 1<<21;
-
-			barker_chip_index=0;
+			cycle_number = 0;
 
 			// Setup SCT
 			Chip_SCT_Init(LPC_SCT);
@@ -335,8 +337,9 @@ int main(void)
 			Chip_SCTPWM_Stop(LPC_SCT);
 			/* Set MATCH0 for max limit */
 			LPC_SCT->REGMODE_U = 0;
-			Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, 0);
-			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
+			Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, 100);
+			Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_2, 50);
+			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
 			LPC_SCT->EV[0].CTRL = 1 << 12;
 			LPC_SCT->EV[0].STATE = 1;
 
@@ -354,10 +357,9 @@ int main(void)
 			NVIC_EnableIRQ(SCT_IRQn);
 
 
-			//Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, 2000);
-			//Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_2, 300);
-			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 2000);
-			Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
+			// Use dummy starter pulse to enter ISR to start pulse train
+			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 16);
+			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 8);
 
 			// Start SCT
 
