@@ -65,9 +65,9 @@ void SysTick_Handler(void)
 
 // Barker-11: +1 +1 +1 -1 -1 -1 +1 -1 -1 +1 -1
 // Encoded in binary: 111 0001 0010
-static uint32_t barker11 = 0x712;
+//static uint32_t barker11 = 0x712;
 // Encoded with double cycles: 11 1111   0000 0011   0000 1100
-//static uint32_t barker11 = 0x3f030a;
+static uint32_t barker11 = 0x3f030a;
 
 static volatile uint32_t barker_chip_bitmask=0;
 static volatile uint32_t barker_chip_index=0; // for debugging
@@ -325,7 +325,7 @@ int main(void)
 		if (barker_chip_bitmask == 0 && (t%100)==0 && t != start_time) {
 			start_time = t;
 			modulation_phase_offset = 0;
-			barker_chip_bitmask = 1<<10;
+			barker_chip_bitmask = 1<<21;
 
 			barker_chip_index=0;
 
