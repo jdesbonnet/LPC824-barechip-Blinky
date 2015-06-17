@@ -75,8 +75,8 @@ static const uint32_t phase_pattern = 0x00008208;
 
 static volatile int32_t cycle_number = -1;
 
-#define ADC_BUFFER_SIZE 4096
-static uint8_t adc_buffer[ADC_BUFFER_SIZE];
+#define ADC_BUFFER_SIZE 1024
+static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint8_t *adc_buffer_ptr;
 static volatile uint32_t adc_count;
 
@@ -156,10 +156,11 @@ void ADC_SEQA_IRQHandler(void)
 		//sequenceComplete = true;
 	}
 
-	adc_buffer[adc_count++] = (Chip_ADC_GetDataReg(LPC_ADC,3)>>4) & 0xff;
+	adc_buffer[adc_count++] = (Chip_ADC_GetDataReg(LPC_ADC,3)>>4) & 0xfff;
 
 	if (adc_count == ADC_BUFFER_SIZE) {
 		//NVIC_DisableIRQ(ADC_SEQA_IRQn);
+		// Disable the ADC hardware trigger
 		Chip_SCTPWM_Stop(LPC_SCT);
 	}
 
@@ -202,6 +203,10 @@ static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
 #define SCT_PWM        LPC_SCT
 #define SCT_PWM_RATE   1000		/* PWM frequency 10 KHz */
 
+int __sys_write(int fileh, char *buf, int len) {
+	Chip_UART_SendBlocking(LPC_USART0, buf,len);
+	return len;
+}
 
 /**
  * @brief	main routine for blinky example
@@ -212,11 +217,31 @@ int main(void)
 
 	SystemCoreClockUpdate();
 
-	//printf ("System clock rate: %d", Chip_Clock_GetSystemClockRate());
 
 	// If we don't call SystemInit() will use default 12MHz internal
 	// clock without any PLL. This is good for initial experiments.
 	//SystemInit();
+
+	//
+	// Initialize UART
+	//
+
+	// Assign pins: use same assignment as serial bootloader
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	Chip_SWM_MovablePinAssign(SWM_U0_TXD_O, 4);
+	Chip_SWM_MovablePinAssign(SWM_U0_RXD_I, 0);
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
+	Chip_UART_Init(LPC_USART0);
+	Chip_UART_ConfigData(LPC_USART0, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1);
+	Chip_Clock_SetUSARTNBaseClockRate((115200 * 16), true);
+	Chip_UART_SetBaud(LPC_USART0, 115200);
+	Chip_UART_Enable(LPC_USART0);
+	Chip_UART_TXEnable(LPC_USART0);
+
+	Chip_UART_SendBlocking(LPC_USART0, "Hello!\r\n", 8);
+
+	printf ("System clock rate: %d\r\n", Chip_Clock_GetSystemClockRate());
 
 	/* Initialize GPIO */
 	Chip_GPIO_Init(LPC_GPIO_PORT);
@@ -294,6 +319,7 @@ int main(void)
 	/* Enable fixed pin ADC3 with SitchMatrix */
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC3);
+	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC10);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 	/* Clear all pending interrupts */
@@ -311,6 +337,9 @@ int main(void)
 
 	/* Enable sequencer */
 	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
+
+	printf ("IOCON->PIO0_23=%x\r\n", LPC_IOCON->PIO0[IOCON_PIO23]);
+
 
 #endif
 
@@ -350,7 +379,7 @@ int main(void)
 
 		// Repeat pulse every 100ms
 		t = systick_counter;
-		if ( (cycle_number== -1) && ((t%100)==0) && (t!=start_time) ) {
+		if ( (cycle_number== -1) && ((t%1000)==0) && (t!=start_time) ) {
 			start_time = t;
 			cycle_number = 0;
 
@@ -401,6 +430,19 @@ int main(void)
 			}
 
 			Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L | SCT_CTRL_HALT_H);
+		}
+
+		if (adc_count == ADC_BUFFER_SIZE) {
+#define DUMP_DATA
+#ifdef DUMP_DATA
+			int i;
+			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
+				printf ("%d ", adc_buffer[i]);
+			}
+			printf ("\n\n\n\n");
+#endif
+
+			adc_count = 0;
 		}
 	}
 }
