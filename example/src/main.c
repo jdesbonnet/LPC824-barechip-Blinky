@@ -71,7 +71,8 @@ static const int num_cycles = 16;
 // shift is introduced.
 // 0b0000 0000  1000 0000  1000 0000  1000 0000
 //static const uint8_t phase_pattern = 0x000029a0;
-static const uint32_t phase_pattern = 0x00008208;
+//static const uint32_t phase_pattern = 0x00008208;
+static const uint32_t phase_pattern = 0x00000808;
 
 static volatile int32_t cycle_number = -1;
 
@@ -79,6 +80,16 @@ static volatile int32_t cycle_number = -1;
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint8_t *adc_buffer_ptr;
 static volatile uint32_t adc_count;
+
+// MIME64 encode
+static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+                                'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+                                'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+                                'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
+                                'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+                                'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+                                'w', 'x', 'y', 'z', '0', '1', '2', '3',
+                                '4', '5', '6', '7', '8', '9', '+', '/'};
 
 /**
  * @brief	Handle interrupt from State Configurable Timer
@@ -234,8 +245,12 @@ int main(void)
 
 	Chip_UART_Init(LPC_USART0);
 	Chip_UART_ConfigData(LPC_USART0, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1);
-	Chip_Clock_SetUSARTNBaseClockRate((115200 * 16), true);
-	Chip_UART_SetBaud(LPC_USART0, 115200);
+	//Chip_Clock_SetUSARTNBaseClockRate((115200 * 16), true);
+	Chip_Clock_SetUSARTNBaseClockRate((230400 * 16), true);
+
+	//Chip_UART_SetBaud(LPC_USART0, 115200);
+	Chip_UART_SetBaud(LPC_USART0, 230400);
+
 	Chip_UART_Enable(LPC_USART0);
 	Chip_UART_TXEnable(LPC_USART0);
 
@@ -379,7 +394,7 @@ int main(void)
 
 		// Repeat pulse every 100ms
 		t = systick_counter;
-		if ( (cycle_number== -1) && ((t%1000)==0) && (t!=start_time) ) {
+		if ( (cycle_number== -1) && ((t%200)==0) && (t!=start_time) ) {
 			start_time = t;
 			cycle_number = 0;
 
@@ -437,9 +452,11 @@ int main(void)
 #ifdef DUMP_DATA
 			int i;
 			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				printf ("%d ", adc_buffer[i]);
+				//printf ("%d ", adc_buffer[i]);
+				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
+								mime64_encoding_table[adc_buffer[i]&0x3f]);
 			}
-			printf ("\n\n\n\n");
+			printf ("\r\n");
 #endif
 
 			adc_count = 0;
