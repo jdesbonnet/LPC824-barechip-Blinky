@@ -73,6 +73,7 @@ static const int num_cycles = 16;
 //static const uint8_t phase_pattern = 0x000029a0;
 //static const uint32_t phase_pattern = 0x00008208;
 static const uint32_t phase_pattern = 0x00000808;
+//static const uint32_t phase_pattern = 0x00005555;
 
 static volatile int32_t cycle_number = -1;
 
@@ -98,10 +99,11 @@ static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
 void SCT_IRQHandler(void)
 {
 
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 #ifdef FALSE
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-
 	if (cycle_number<5) {
 		int i;
 		for (i = 1; i <= cycle_number; i++) {
@@ -124,6 +126,10 @@ void SCT_IRQHandler(void)
 	// +2 because we are setting the RELOAD register, also because
 	// the first entry into interrupt is due to starter pulse
 	if (cycle_number == num_cycles+2) {
+
+		// Pulse is finished. Now switch to using SCT to trigger
+		// ADC samples.
+
 		//Chip_SCTPWM_Stop(LPC_SCT);
 		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/6);
 		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/6);
@@ -133,7 +139,7 @@ void SCT_IRQHandler(void)
 				3 //  the output channel eg SCT_OUT3 (there are 6 in total)
 			);
 
-		// SwitchMatrix: Assign SCT_OUT0 to
+		// SwitchMatrix: Unassign SCT_OUT0
 		Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 		Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 0xff); // was OUT0_O
 		Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
@@ -396,12 +402,8 @@ int main(void)
 		t = systick_counter;
 		if ( (cycle_number== -1) && ((t%200)==0) && (t!=start_time) ) {
 			start_time = t;
-			cycle_number = 0;
 
-			// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
-			Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-			Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15); // was OUT0_O
-			Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
 
 			// Setup SCT
 			Chip_SCT_Init(LPC_SCT);
@@ -409,9 +411,9 @@ int main(void)
 			Chip_SCTPWM_Stop(LPC_SCT);
 			/* Set MATCH0 for max limit */
 			LPC_SCT->REGMODE_U = 0;
-			Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_0, 100);
-			Chip_SCT_SetMatchCount(LPC_SCT, SCT_MATCH_2, 50);
-			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
+
+			cycle_number = 0;
+
 			LPC_SCT->EV[0].CTRL = 1 << 12;
 			LPC_SCT->EV[0].STATE = 1;
 
@@ -438,11 +440,19 @@ int main(void)
 
 			// Start SCT
 
+			/*
 			int i;
-			for (i = 0; i < 10; i++) {
+			for (i = 0; i < 3; i++) {
 				Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 				Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 			}
+			*/
+
+			// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
+			Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+			Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15); // was OUT0_O
+			Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
 
 			Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L | SCT_CTRL_HALT_H);
 		}
