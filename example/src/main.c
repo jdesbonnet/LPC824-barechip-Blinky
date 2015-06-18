@@ -66,14 +66,14 @@ void SysTick_Handler(void)
 // Barker-11: +1 +1 +1 -1 -1 -1 +1 -1 -1 +1 -1
 // Encoded in binary: 111 0001 0010
 //static uint32_t barker11 = 0x712;
-static const int num_cycles = 16;
+static const int num_cycles = 8;
 // This bit pattern determines on which cycle numbers a 180 degree phase
 // shift is introduced.
 // 0b0000 0000  1000 0000  1000 0000  1000 0000
 //static const uint8_t phase_pattern = 0x000029a0;
 //static const uint32_t phase_pattern = 0x00008208;
-static const uint32_t phase_pattern = 0x00000808;
-//static const uint32_t phase_pattern = 0x00005555;
+//static const uint32_t phase_pattern = 0x00000808;
+static const uint32_t phase_pattern = 0x20;
 
 static volatile int32_t cycle_number = -1;
 
@@ -113,13 +113,21 @@ void SCT_IRQHandler(void)
 	}
 #endif
 
+#define PSK
+#ifdef PSK
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
-
 	if (phase_pattern & (1<<cycle_number) ) {
 		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 900);
 	} else {
 		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
 	}
+#endif
+
+//#define CHIRP
+#ifdef CHIRP
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300 - cycle_number*2);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600 - cycle_number*4);
+#endif
 
 	cycle_number++;
 
