@@ -82,6 +82,12 @@ static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint8_t *adc_buffer_ptr;
 static volatile uint32_t adc_count;
 
+/* Size of the source and destination buffers in 32-bit words.
+   Allowable values  = 128, 256, 512, or 1024 */
+#define SIZE_BUFFERS            (256)
+/* Source and destination buffers */
+uint32_t src[SIZE_BUFFERS], dst[SIZE_BUFFERS];
+
 // MIME64 encode
 static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
                                 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
@@ -203,6 +209,38 @@ void ADC_OVR_IRQHandler(void) {
 	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 }
 
+
+static volatile bool dmaDone;
+/**
+ * @brief	DMA Interrupt Handler
+ * @return	None
+ */
+void DMA_IRQHandler(void)
+{
+
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+
+	/* Error interrupt on channel 0? */
+	if ((Chip_DMA_GetIntStatus(LPC_DMA) & DMA_INTSTAT_ACTIVEERRINT) != 0) {
+		/* This shouldn't happen for this simple DMA example, so set the LED
+		   to indicate an error occurred. This is the correct method to clear
+		   an abort. */
+		Chip_DMA_DisableChannel(LPC_DMA, DMA_CH0);
+		while ((Chip_DMA_GetBusyChannels(LPC_DMA) & (1 << DMA_CH0)) != 0) {}
+		Chip_DMA_AbortChannel(LPC_DMA, DMA_CH0);
+		Chip_DMA_ClearErrorIntChannel(LPC_DMA, DMA_CH0);
+		Chip_DMA_EnableChannel(LPC_DMA, DMA_CH0);
+	}
+
+	/* Clear DMA interrupt for the channel */
+	Chip_DMA_ClearActiveIntAChannel(LPC_DMA, DMA_CH0);
+
+	dmaDone = true;
+}
+
 #ifdef ENABLE_MRT
 /* Setup a timer for a periodic (repeat mode) rate */
 static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
@@ -233,6 +271,62 @@ int __sys_write(int fileh, char *buf, int len) {
 	return len;
 }
 
+void start_pulse () {
+
+
+
+	// Setup SCT
+	Chip_SCT_Init(LPC_SCT);
+	/* Stop the SCT before configuration */
+	Chip_SCTPWM_Stop(LPC_SCT);
+	/* Set MATCH0 for max limit */
+	LPC_SCT->REGMODE_U = 0;
+
+	cycle_number = 0;
+
+	LPC_SCT->EV[0].CTRL = 1 << 12;
+	LPC_SCT->EV[0].STATE = 1;
+
+	// SCT->EV[2] =
+	Chip_SCTPWM_SetOutPin(SCT_PWM,
+			2, // PWM channel
+			0 //  the output channel eg SCT_OUT3 (there are 6 in total)
+		);
+
+	/* Set SCT Counter to count 32-bits and reset to 0 after reaching MATCH0 */
+	Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L);
+	/* Enable flag to request an interrupt for Event 0 */
+	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
+	/* Enable the interrupt for the SCT */
+	NVIC_EnableIRQ(SCT_IRQn);
+
+
+	// Use dummy starter pulse to enter ISR to start pulse train
+	//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 16);
+	//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 8);
+
+	// Setup ADC stuff
+	adc_count = 0;
+
+	// Start SCT
+
+	/*
+	int i;
+	for (i = 0; i < 3; i++) {
+		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	}
+	*/
+
+	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15); // was OUT0_O
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
+
+	Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L | SCT_CTRL_HALT_H);
+
+}
 /**
  * @brief	main routine for blinky example
  * @return	Function should not exit.
@@ -410,60 +504,53 @@ int main(void)
 		t = systick_counter;
 		if ( (cycle_number== -1) && ((t%200)==0) && (t!=start_time) ) {
 			start_time = t;
-
-
-
-			// Setup SCT
-			Chip_SCT_Init(LPC_SCT);
-			/* Stop the SCT before configuration */
-			Chip_SCTPWM_Stop(LPC_SCT);
-			/* Set MATCH0 for max limit */
-			LPC_SCT->REGMODE_U = 0;
-
-			cycle_number = 0;
-
-			LPC_SCT->EV[0].CTRL = 1 << 12;
-			LPC_SCT->EV[0].STATE = 1;
-
-			// SCT->EV[2] =
-			Chip_SCTPWM_SetOutPin(SCT_PWM,
-					2, // PWM channel
-					0 //  the output channel eg SCT_OUT3 (there are 6 in total)
-				);
-
-			/* Set SCT Counter to count 32-bits and reset to 0 after reaching MATCH0 */
-			Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L);
-			/* Enable flag to request an interrupt for Event 0 */
-			Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
-			/* Enable the interrupt for the SCT */
-			NVIC_EnableIRQ(SCT_IRQn);
-
-
-			// Use dummy starter pulse to enter ISR to start pulse train
-			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 16);
-			//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 8);
-
-			// Setup ADC stuff
-			adc_count = 0;
-
-			// Start SCT
-
-			/*
-			int i;
-			for (i = 0; i < 3; i++) {
-				Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-				Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-			}
-			*/
-
-			// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
-			Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-			Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15); // was OUT0_O
-			Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
-
-
-			Chip_SCT_ClearControl(LPC_SCT, SCT_CTRL_HALT_L | SCT_CTRL_HALT_H);
+			start_pulse();
 		}
+
+		// Setup DMA for ADC
+
+		/* DMA initialization - enable DMA clocking and reset DMA if needed */
+		Chip_DMA_Init(LPC_DMA);
+		/* Enable DMA controller and use driver provided DMA table for current descriptors */
+		Chip_DMA_Enable(LPC_DMA);
+		Chip_DMA_SetSRAMBase(LPC_DMA, DMA_ADDR(Chip_DMA_Table));
+
+		/* Setup channel 0 for the following configuration:
+		   - High channel priority
+		   - Interrupt A fires on descriptor completion */
+		Chip_DMA_EnableChannel(LPC_DMA, DMA_CH0);
+		Chip_DMA_EnableIntChannel(LPC_DMA, DMA_CH0);
+		Chip_DMA_SetupChannelConfig(LPC_DMA, DMA_CH0,
+				(DMA_CFG_HWTRIGEN | DMA_CFG_TRIGTYPE_EDGE | DMA_CFG_TRIGPOL_HIGH |
+						 DMA_CFG_BURSTPOWER_128 | DMA_CFG_CHPRIORITY(0)));
+
+		DMA_CHDESC_T dmaDesc;
+
+		/* DMA descriptor for memory to memory operation - note that addresses must
+		   be the END address for src and destination, not the starting address.
+		     DMA operations moves from end to start. */
+		dmaDesc.source = DMA_ADDR(&src[SIZE_BUFFERS - 1]) + 3;
+		dmaDesc.dest = DMA_ADDR(&dst[SIZE_BUFFERS - 1]) + 3;
+		dmaDesc.next = DMA_ADDR(0);
+
+		/* Enable DMA interrupt */
+		NVIC_EnableIRQ(DMA_IRQn);
+
+		/* Setup transfer descriptor and validate it */
+		Chip_DMA_SetupTranChannel(LPC_DMA, DMA_CH0, &dmaDesc);
+		Chip_DMA_SetValidChannel(LPC_DMA, DMA_CH0);
+
+		/* Setup data transfer and software trigger in same call */
+		Chip_DMA_SetupChannelTransfer(LPC_DMA, DMA_CH0,
+				 (DMA_XFERCFG_CFGVALID | DMA_XFERCFG_SETINTA | DMA_XFERCFG_SWTRIG |
+				 DMA_XFERCFG_WIDTH_32 | DMA_XFERCFG_SRCINC_1 | DMA_XFERCFG_DSTINC_1 |
+									   DMA_XFERCFG_XFERCOUNT(SIZE_BUFFERS)));
+
+		//DMATRIG_ADC_SEQA_IRQ;
+
+		/* Wait for DMA completion */
+		while (dmaDone == false) {}
+
 
 		if (adc_count == ADC_BUFFER_SIZE) {
 #define DUMP_DATA
