@@ -84,7 +84,7 @@ static volatile uint32_t adc_count;
 
 /* Size of the source and destination buffers in 32-bit words.
    Allowable values  = 128, 256, 512, or 1024 */
-#define SIZE_BUFFERS            (256)
+#define SIZE_BUFFERS            (512)
 /* Source and destination buffers */
 uint32_t src[SIZE_BUFFERS], dst[SIZE_BUFFERS];
 
@@ -175,8 +175,8 @@ void ADC_SEQA_IRQHandler(void)
 {
 	uint32_t pending;
 
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
 
 	/* Get pending interrupts */
 	pending = Chip_ADC_GetFlags(LPC_ADC);
@@ -213,10 +213,13 @@ static volatile bool dmaDone;
 void DMA_IRQHandler(void)
 {
 
+	int i;
+
+	for (i = 0; i < 16; i++) {
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	}
+
 
 	/* Error interrupt on channel 0? */
 	if ((Chip_DMA_GetIntStatus(LPC_DMA) & DMA_INTSTAT_ACTIVEERRINT) != 0) {
@@ -332,9 +335,13 @@ void start_dma () {
 			(DMA_CFG_HWTRIGEN
 					| DMA_CFG_TRIGTYPE_EDGE
 					| DMA_CFG_TRIGPOL_HIGH
-					| DMA_CFG_BURSTPOWER_128
+					| DMA_CFG_BURSTPOWER_1
 					 | DMA_CFG_CHPRIORITY(0)
 					 ));
+
+	//Chip_DMATRIGMUX_SetInputTrig();
+	//Chip_DMA_SetTrigChannel();
+
 
 	DMA_CHDESC_T dmaDesc;
 
@@ -342,9 +349,9 @@ void start_dma () {
 	   be the END address for src and destination, not the starting address.
 	     DMA operations moves from end to start. */
 	//dmaDesc.source = DMA_ADDR(&src[SIZE_BUFFERS - 1]) + 3;
-	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[3]) + 0); // ADC data register is source
+	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[3]) ); // ADC data register is source
 	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
-	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
+	dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
 
 	dmaDesc.dest = DMA_ADDR(&dst[SIZE_BUFFERS - 1]) + 3;
 	dmaDesc.next = DMA_ADDR(0);
@@ -363,7 +370,7 @@ void start_dma () {
 				DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
 				| DMA_XFERCFG_SETINTA //
 				| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
-				| DMA_XFERCFG_WIDTH_16 // 8,16,32 bits allowed
+				| DMA_XFERCFG_WIDTH_32 // 8,16,32 bits allowed
 				| DMA_XFERCFG_SRCINC_0 // do not increment source
 				| DMA_XFERCFG_DSTINC_1 // increment dest by widthx1
 				| DMA_XFERCFG_XFERCOUNT(SIZE_BUFFERS)
@@ -371,6 +378,11 @@ void start_dma () {
 				);
 
 	//DMATRIG_ADC_SEQA_IRQ;
+	int i;
+	for (i = 0; i < 8; i++) {
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	}
 
 }
 
@@ -504,13 +516,10 @@ int main(void)
 
 	/* Enable ADC NVIC interrupt */
 	NVIC_EnableIRQ(ADC_SEQA_IRQn);
-	NVIC_EnableIRQ(ADC_OVR_IRQn);
+	//NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
 	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
-
-	printf ("IOCON->PIO0_23=%x\r\n", LPC_IOCON->PIO0[IOCON_PIO23]);
-
 
 #endif
 
@@ -553,15 +562,20 @@ int main(void)
 		if ( (cycle_number== -1) && ((t%200)==0) && (t!=start_time) ) {
 			start_time = t;
 			start_pulse();
+
+			while (cycle_number != -1) {};
+
 			start_dma();
 		}
 
+		int waitCount = 0;
 
-
-
-
+		//while (!dmaDone) {waitCount++;}
+		//printf ("waitCount=%d\r\n",waitCount);
 
 		if (adc_count == ADC_BUFFER_SIZE) {
+		//if (dmaDone) {
+
 //#define DUMP_DATA
 #ifdef DUMP_DATA
 			int i;
