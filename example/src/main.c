@@ -77,14 +77,14 @@ static const uint32_t phase_pattern = 0x20;
 
 static volatile int32_t cycle_number = -1;
 
-#define ADC_BUFFER_SIZE 1024
+#define ADC_BUFFER_SIZE 2800
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint8_t *adc_buffer_ptr;
 static volatile uint32_t adc_count;
 
 /* Size of the source and destination buffers in 32-bit words.
    Allowable values  = 128, 256, 512, or 1024 */
-#define SIZE_BUFFERS            (512)
+#define SIZE_BUFFERS            (128)
 /* Source and destination buffers */
 uint32_t src[SIZE_BUFFERS], dst[SIZE_BUFFERS];
 
@@ -98,6 +98,16 @@ static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
                                 'w', 'x', 'y', 'z', '0', '1', '2', '3',
                                 '4', '5', '6', '7', '8', '9', '+', '/'};
 
+
+static void debug_pin_pulse (int n)
+{
+	int i;
+	for (i = 0; i < n; i++) {
+		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
+		Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	}
+}
+
 /**
  * @brief	Handle interrupt from State Configurable Timer
  * @return	Nothing
@@ -105,10 +115,8 @@ static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
 void SCT_IRQHandler(void)
 {
 
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	debug_pin_pulse (2);
+
 #ifdef FALSE
 	if (cycle_number<5) {
 		int i;
@@ -145,8 +153,8 @@ void SCT_IRQHandler(void)
 		// ADC samples.
 
 		//Chip_SCTPWM_Stop(LPC_SCT);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/6);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/6);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/10);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/10);
 
 		Chip_SCTPWM_SetOutPin(LPC_SCT,
 				2, // PWM channel
@@ -155,9 +163,10 @@ void SCT_IRQHandler(void)
 
 		// SwitchMatrix: Unassign SCT_OUT0
 		Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-		Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 0xff); // was OUT0_O
+		Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 0xff);
 		Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
+		// No need for SCT interrupt for ADC triggering
 		NVIC_DisableIRQ(SCT_IRQn);
 		cycle_number=-1;
 	}
@@ -175,8 +184,7 @@ void ADC_SEQA_IRQHandler(void)
 {
 	uint32_t pending;
 
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	debug_pin_pulse(1);
 
 	/* Get pending interrupts */
 	pending = Chip_ADC_GetFlags(LPC_ADC);
@@ -213,25 +221,7 @@ static volatile bool dmaDone;
 void DMA_IRQHandler(void)
 {
 
-	int i;
-
-	for (i = 0; i < 16; i++) {
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	}
-
-
-	/* Error interrupt on channel 0? */
-	if ((Chip_DMA_GetIntStatus(LPC_DMA) & DMA_INTSTAT_ACTIVEERRINT) != 0) {
-		/* This shouldn't happen for this simple DMA example, so set the LED
-		   to indicate an error occurred. This is the correct method to clear
-		   an abort. */
-		Chip_DMA_DisableChannel(LPC_DMA, DMA_CH0);
-		while ((Chip_DMA_GetBusyChannels(LPC_DMA) & (1 << DMA_CH0)) != 0) {}
-		Chip_DMA_AbortChannel(LPC_DMA, DMA_CH0);
-		Chip_DMA_ClearErrorIntChannel(LPC_DMA, DMA_CH0);
-		Chip_DMA_EnableChannel(LPC_DMA, DMA_CH0);
-	}
+	debug_pin_pulse (32);
 
 	/* Clear DMA interrupt for the channel */
 	Chip_DMA_ClearActiveIntAChannel(LPC_DMA, DMA_CH0);
@@ -264,11 +254,18 @@ static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
 #define SCT_PWM        LPC_SCT
 #define SCT_PWM_RATE   1000		/* PWM frequency 10 KHz */
 
+/**
+ * Send printf() to UART
+ */
 int __sys_write(int fileh, char *buf, int len) {
 	Chip_UART_SendBlocking(LPC_USART0, buf,len);
 	return len;
 }
 
+/**
+ * Start ultrasonic TX pulse. SCT IRQ handler will set cycle_number to -1
+ * when complete.
+ */
 void start_pulse () {
 
 	// Setup SCT
@@ -316,7 +313,10 @@ void start_pulse () {
 
 }
 
-void start_dma () {
+/**
+ * Does not work :(
+ */
+void start_adc_dma () {
 
 	// Setup DMA for ADC
 
@@ -333,15 +333,15 @@ void start_dma () {
 	Chip_DMA_EnableIntChannel(LPC_DMA, DMA_CH0);
 	Chip_DMA_SetupChannelConfig(LPC_DMA, DMA_CH0,
 			(DMA_CFG_HWTRIGEN
+					//| DMA_CFG_PERIPHREQEN  //?? what's this for???
 					| DMA_CFG_TRIGTYPE_EDGE
 					| DMA_CFG_TRIGPOL_HIGH
-					| DMA_CFG_BURSTPOWER_1
+					//| DMA_CFG_BURSTPOWER_1
 					 | DMA_CFG_CHPRIORITY(0)
 					 ));
 
-	//Chip_DMATRIGMUX_SetInputTrig();
-	//Chip_DMA_SetTrigChannel();
-
+	// Attempt to use ADC SEQA to trigger DMA xfer
+	Chip_DMATRIGMUX_SetInputTrig(LPC_DMATRIGMUX, DMA_CH0, DMATRIG_ADC_SEQA_IRQ);
 
 	DMA_CHDESC_T dmaDesc;
 
@@ -351,7 +351,7 @@ void start_dma () {
 	//dmaDesc.source = DMA_ADDR(&src[SIZE_BUFFERS - 1]) + 3;
 	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[3]) ); // ADC data register is source
 	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
-	dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
+	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
 
 	dmaDesc.dest = DMA_ADDR(&dst[SIZE_BUFFERS - 1]) + 3;
 	dmaDesc.next = DMA_ADDR(0);
@@ -369,7 +369,7 @@ void start_dma () {
 			 (
 				DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
 				| DMA_XFERCFG_SETINTA //
-				| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
+				//| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
 				| DMA_XFERCFG_WIDTH_32 // 8,16,32 bits allowed
 				| DMA_XFERCFG_SRCINC_0 // do not increment source
 				| DMA_XFERCFG_DSTINC_1 // increment dest by widthx1
@@ -378,12 +378,8 @@ void start_dma () {
 				);
 
 	//DMATRIG_ADC_SEQA_IRQ;
-	int i;
-	for (i = 0; i < 8; i++) {
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	}
 
+	debug_pin_pulse(8);
 }
 
 
@@ -436,42 +432,6 @@ int main(void)
 	Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
 
 
-//#define ENABLE_PWM
-
-#ifdef ENABLE_PWM
-
-	Chip_SCT_Init(LPC_SCT);
-
-	// User MATCH0 to determine PWM frequency
-	Chip_SCTPWM_SetRate(SCT_PWM, SCT_PWM_RATE);
-
-	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
-	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	Chip_SWM_MovablePinAssign(SWM_SCT_OUT3_O, 15); // was OUT0_O
-	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
-
-	// SCT->EV[2] =
-	Chip_SCTPWM_SetOutPin(SCT_PWM,
-			2, // PWM channel
-			3 //  the output channel eg SCT_OUT3 (there are 6 in total)
-		);
-
-	/* Start with 50% duty cycle */
-	// MATCHREL[2] = rate
-	Chip_SCTPWM_SetDutyCycle(SCT_PWM,
-			2,
-			Chip_SCTPWM_GetTicksPerCycle(SCT_PWM) / 2);
-
-	/* Enable flag to request an interrupt for Event 0 */
-	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
-
-	/* Enable the interrupt for the SCT */
-	NVIC_EnableIRQ(SCT_IRQn);
-
-	// Start pulse train
-	//Chip_SCTPWM_Start(SCT_PWM);
-#endif
-
 #define ENABLE_ADC
 #ifdef ENABLE_ADC
 	//
@@ -509,13 +469,16 @@ int main(void)
 	Chip_ADC_ClearFlags(LPC_ADC, Chip_ADC_GetFlags(LPC_ADC));
 
 	/* Enable ADC overrun and sequence A completion interrupts */
+
+	// This has impact on DMA operation. Why?
 	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
 								//| ADC_INTEN_OVRRUN_ENABLE
 								));
 
 
-	/* Enable ADC NVIC interrupt */
-	NVIC_EnableIRQ(ADC_SEQA_IRQn);
+	// ADC interrupt disabled for DMA
+	//NVIC_EnableIRQ(ADC_SEQA_IRQn);
+
 	//NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
@@ -563,41 +526,47 @@ int main(void)
 			start_time = t;
 			start_pulse();
 
+			// Wait for end of pulse
 			while (cycle_number != -1) {};
 
-			start_dma();
-		}
-
-		int waitCount = 0;
-
-		//while (!dmaDone) {waitCount++;}
-		//printf ("waitCount=%d\r\n",waitCount);
-
-		if (adc_count == ADC_BUFFER_SIZE) {
-		//if (dmaDone) {
-
-//#define DUMP_DATA
-#ifdef DUMP_DATA
+			// Start DMA for ADC
+			//dmaDone=false;
+			//start_dma();
 			int i;
 			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				//printf ("%d ", adc_buffer[i]);
+				while (LPC_ADC->DR[3] & (1<<31) ) ;
+				adc_buffer[i] = (LPC_ADC->DR[3] >> 4) & 0xfff;
+				debug_pin_pulse(1);
+			}
+			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
 				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
 								mime64_encoding_table[adc_buffer[i]&0x3f]);
 			}
 			printf ("\r\n");
-#endif
+		}
+
+		//while (!dmaDone) ;
+
 
 #define DUMP_DMA
 #ifdef DUMP_DMA
-		/* Wait for DMA completion */
-			//int dmaWait = 0;
-			//while (dmaDone == false) {dmaWait++;}
+		if (dmaDone) {
 			int i;
-			//printf ("dmaWait=%d ",dmaWait);
 			for (i = 0; i < SIZE_BUFFERS; i++) {
 				printf ("%x ", dst[i]);
-				//printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
-				//				mime64_encoding_table[adc_buffer[i]&0x3f]);
+			}
+			printf ("\r\n");
+			dmaDone=false;
+		}
+#endif
+
+		if (adc_count == ADC_BUFFER_SIZE) {
+#define DUMP_DATA
+#ifdef DUMP_DATA
+			int i;
+			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
+				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
+								mime64_encoding_table[adc_buffer[i]&0x3f]);
 			}
 			printf ("\r\n");
 #endif
