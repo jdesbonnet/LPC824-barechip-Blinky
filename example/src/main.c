@@ -77,6 +77,10 @@ static const uint32_t phase_pattern = 0x20;
 
 static volatile int32_t cycle_number = -1;
 
+// The period (1/f) of the pulse
+static uint16_t center_freq_period=600;
+
+
 #define ADC_BUFFER_SIZE 2800
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint8_t *adc_buffer_ptr;
@@ -84,9 +88,9 @@ static volatile uint32_t adc_count;
 
 /* Size of the source and destination buffers in 32-bit words.
    Allowable values  = 128, 256, 512, or 1024 */
-#define SIZE_BUFFERS            (128)
+#define DMA_BUFFER_SIZE            (128)
 /* Source and destination buffers */
-uint32_t src[SIZE_BUFFERS], dst[SIZE_BUFFERS];
+uint32_t src[DMA_BUFFER_SIZE], dst[DMA_BUFFER_SIZE];
 
 // MIME64 encode
 static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -117,30 +121,22 @@ void SCT_IRQHandler(void)
 
 	debug_pin_pulse (2);
 
-#ifdef FALSE
-	if (cycle_number<5) {
-		int i;
-		for (i = 1; i <= cycle_number; i++) {
-			Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-			Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-		}
-	}
-#endif
-
 #define PSK
 #ifdef PSK
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300);
+	int half_period = center_freq_period/2;
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period);
 	if (phase_pattern & (1<<cycle_number) ) {
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 900);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period + half_period);
 	} else {
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period);
 	}
 #endif
 
 //#define CHIRP
 #ifdef CHIRP
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300 - cycle_number*2);
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600 - cycle_number*4);
+	int half_period = center_freq_period/2;
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period - cycle_number*2);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period - cycle_number*4);
 #endif
 
 	cycle_number++;
@@ -153,8 +149,9 @@ void SCT_IRQHandler(void)
 		// ADC samples.
 
 		//Chip_SCTPWM_Stop(LPC_SCT);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 300/10);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 600/10);
+		int half_period = center_freq_period / 2;
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period/10);
+		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period/10);
 
 		Chip_SCTPWM_SetOutPin(LPC_SCT,
 				2, // PWM channel
@@ -266,7 +263,9 @@ int __sys_write(int fileh, char *buf, int len) {
  * Start ultrasonic TX pulse. SCT IRQ handler will set cycle_number to -1
  * when complete.
  */
-void start_pulse () {
+void start_pulse (int freq) {
+
+	center_freq_period = SystemCoreClock / freq;
 
 	// Setup SCT
 	Chip_SCT_Init(LPC_SCT);
@@ -292,11 +291,6 @@ void start_pulse () {
 	Chip_SCT_EnableEventInt(LPC_SCT, SCT_EVT_0);
 	/* Enable the interrupt for the SCT */
 	NVIC_EnableIRQ(SCT_IRQn);
-
-
-	// Use dummy starter pulse to enter ISR to start pulse train
-	//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 16);
-	//Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 8);
 
 	// Setup ADC stuff
 	adc_count = 0;
@@ -353,7 +347,7 @@ void start_adc_dma () {
 	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
 	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
 
-	dmaDesc.dest = DMA_ADDR(&dst[SIZE_BUFFERS - 1]) + 3;
+	dmaDesc.dest = DMA_ADDR(&dst[DMA_BUFFER_SIZE - 1]) + 3;
 	dmaDesc.next = DMA_ADDR(0);
 
 	/* Enable DMA interrupt */
@@ -373,7 +367,7 @@ void start_adc_dma () {
 				| DMA_XFERCFG_WIDTH_32 // 8,16,32 bits allowed
 				| DMA_XFERCFG_SRCINC_0 // do not increment source
 				| DMA_XFERCFG_DSTINC_1 // increment dest by widthx1
-				| DMA_XFERCFG_XFERCOUNT(SIZE_BUFFERS)
+				| DMA_XFERCFG_XFERCOUNT(DMA_BUFFER_SIZE)
 				)
 				);
 
@@ -524,7 +518,7 @@ int main(void)
 		t = systick_counter;
 		if ( (cycle_number== -1) && ((t%200)==0) && (t!=start_time) ) {
 			start_time = t;
-			start_pulse();
+			start_pulse(40000);
 
 			// Wait for end of pulse
 			while (cycle_number != -1) {};
@@ -552,7 +546,7 @@ int main(void)
 #ifdef DUMP_DMA
 		if (dmaDone) {
 			int i;
-			for (i = 0; i < SIZE_BUFFERS; i++) {
+			for (i = 0; i < DMA_BUFFER_SIZE; i++) {
 				printf ("%x ", dst[i]);
 			}
 			printf ("\r\n");
