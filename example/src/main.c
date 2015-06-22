@@ -55,6 +55,8 @@ static uint16_t center_freq_period=600;
 
 
 #define ADC_BUFFER_SIZE 2800
+#define ADC_SAMPLE_RATE 240000
+
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint32_t adc_count;
 
@@ -74,7 +76,10 @@ static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
                                 'w', 'x', 'y', 'z', '0', '1', '2', '3',
                                 '4', '5', '6', '7', '8', '9', '+', '/'};
 
-
+/**
+ * Pulse debugging pin to indicate an event on a oscilloscope trace.
+ *
+ */
 static void debug_pin_pulse (int n)
 {
 	int i;
@@ -141,15 +146,14 @@ void SCT_IRQHandler(void)
  */
 void ADC_SEQA_IRQHandler(void)
 {
-	uint32_t pending;
+
+	/* Get pending interrupts */
+	uint32_t pending = Chip_ADC_GetFlags(LPC_ADC);
 
 	debug_pin_pulse(1);
 
-	/* Get pending interrupts */
-	pending = Chip_ADC_GetFlags(LPC_ADC);
-
-	adc_buffer[adc_count++] = (Chip_ADC_GetDataReg(LPC_ADC,3)>>4) & 0xfff;
-	//adc_count++;
+	//adc_buffer[adc_count++] = (Chip_ADC_GetDataReg(LPC_ADC,3)>>4) & 0xfff;
+	adc_buffer[adc_count++] = Chip_ADC_GetDataReg(LPC_ADC,3);
 
 	if (adc_count == ADC_BUFFER_SIZE) {
 		//NVIC_DisableIRQ(ADC_SEQA_IRQn);
@@ -218,6 +222,24 @@ int __sys_write(int fileh, char *buf, int len) {
 	Chip_UART_SendBlocking(LPC_USART0, buf,len);
 	return len;
 }
+/**
+ * Initialize Multirate Timer (MRT)
+ */
+void mrt_init () {
+	/* MRT Initialization and disable all timers */
+	Chip_MRT_Init();
+	int i;
+	for (i = 0; i < 4; i++) {
+		Chip_MRT_SetDisabled(Chip_MRT_GetRegPtr(i));
+	}
+
+	/* Enable the interrupt for the MRT */
+	NVIC_EnableIRQ(MRT_IRQn);
+
+	/* Enable timers 0 and 1 in repeat mode with different rates */
+	setupMRT(0, MRT_MODE_REPEAT, 500);
+	//setupMRT(1, MRT_MODE_REPEAT, 40000);/* 4Hz rate */
+}
 
 /**
  * Initialize ADC for use.
@@ -258,13 +280,12 @@ void adc_init () {
 
 	// This has impact on DMA operation. Why?
 	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
-								| ADC_INTEN_OVRRUN_ENABLE
+								//| ADC_INTEN_OVRRUN_ENABLE
 								));
 
 
 	// ADC interrupt disabled for DMA
 	//NVIC_EnableIRQ(ADC_SEQA_IRQn);
-
 	//NVIC_EnableIRQ(ADC_OVR_IRQn);
 
 	/* Enable sequencer */
@@ -311,7 +332,7 @@ void start_pulse (int freq) {
 
 	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15); // was OUT0_O
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 
@@ -322,7 +343,7 @@ void start_pulse (int freq) {
 /**
  * Does not work :(
  */
-void start_adc_dma () {
+void adc_dma_capture () {
 
 	// Setup DMA for ADC
 
@@ -389,14 +410,13 @@ void start_adc_dma () {
 }
 
 /**
- * Capture echo data.
+ * Capture echo data using tight poll loop.
  */
-void start_adc () {
+void adc_poll_loop_capture () {
 
-	// Use SCT to time ADC samples. Sample rate 10 * tx freq
-	int half_period = center_freq_period / 2;
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period/10);
-	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period/10);
+	// Use SCT to time ADC samples.
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, 12000000/ADC_SAMPLE_RATE);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, 24000000/ADC_SAMPLE_RATE);
 
 	// Using SCT0_OUT3 to trigger ADC sampling
 	Chip_SCTPWM_SetOutPin(LPC_SCT,
@@ -407,16 +427,11 @@ void start_adc () {
 
 	// Tight loop poll to get ADC samples. We sould disable interrupts.
 	int i;
-	debug_pin_pulse(8);
-	//NVIC_EnableIRQ(ADC_OVR_IRQn);
 	for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-		while (LPC_ADC->DR[3] & (1<<31) ) ;
-		//adc_buffer[i] = (LPC_ADC->DR[3] >> 4) & 0xfff;
+		while ( LPC_ADC->DR[3] & (1<<31) == 0 ) ;
 		adc_buffer[i] = (uint16_t)LPC_ADC->DR[3];
 		debug_pin_pulse(1);
 	}
-	NVIC_DisableIRQ(ADC_OVR_IRQn);
-	debug_pin_pulse(8);
 
 	// Shift ADC data. We do this outside of capture loop to keep the
 	// capture loop as fast as possible.
@@ -427,7 +442,40 @@ void start_adc () {
 	// For interrupt method
 	adc_count = 0;
 }
+/**
+ * Capture echo data using ADC interrupt. This works, but cannot capture at rates
+ * much above 240ksps.
+ */
+void adc_interrupt_capture () {
 
+	// Use SCT to time ADC samples.
+	uint32_t clock_hz =  Chip_Clock_GetSystemClockRate();
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, (clock_hz/ADC_SAMPLE_RATE)/2 );
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0,  clock_hz/ADC_SAMPLE_RATE);
+
+	// Using SCT0_OUT3 to trigger ADC sampling
+	Chip_SCTPWM_SetOutPin(LPC_SCT,
+			2, // PWM channel
+			3 //  the output channel eg SCT_OUT3 (there are 6 in total)
+		);
+
+
+	adc_count = 0;
+	NVIC_EnableIRQ(ADC_SEQA_IRQn);
+
+	// Wait for buffer to fill. Sleep as much as possible in the mean time.
+	while (adc_count < ADC_BUFFER_SIZE) {
+		__WFI();
+	}
+
+	// Shift ADC data. We do this outside of the ISR to keep the ISR duration
+	// as short as possible.
+	int i;
+	for (i = 0; i < ADC_BUFFER_SIZE; i++) {
+		adc_buffer[i] >>= 4;
+	}
+
+}
 /**
  * @brief	main routine for blinky example
  * @return	Function should not exit.
@@ -440,6 +488,9 @@ int main(void)
 
 	// If we don't call SystemInit() will use default 12MHz internal
 	// clock without any PLL. This is good for initial experiments.
+	// This causes a hang. Why? Maybe it's trying to use (non existant)
+	// external crystal?
+	// DISABLE:
 	//SystemInit();
 
 	//
@@ -485,27 +536,15 @@ int main(void)
 	// Multi Rate Timer (MRT)
 	//
 #ifdef ENABLE_MRT
-	/* MRT Initialization and disable all timers */
-	Chip_MRT_Init();
-	int i;
-	for (i = 0; i < 4; i++) {
-		Chip_MRT_SetDisabled(Chip_MRT_GetRegPtr(i));
-	}
-
-	/* Enable the interrupt for the MRT */
-	NVIC_EnableIRQ(MRT_IRQn);
-
-	/* Enable timers 0 and 1 in repeat mode with different rates */
-	setupMRT(0, MRT_MODE_REPEAT, 500);
-	//setupMRT(1, MRT_MODE_REPEAT, 40000);/* 4Hz rate */
+	mrt_init();
 #endif
 
 
 	/* Enable SysTick Timer */
 	SysTick_Config(SystemCoreClock / TICKRATE_HZ);
 
-
-
+	// Call one time initialization of ADC
+	adc_init();
 
 	uint32_t start_time;
 	uint32_t t;
@@ -519,21 +558,7 @@ int main(void)
 		if ( (cycle_number== -1) && ((t%(TICKRATE_HZ/50))==0) && (t!=start_time) ) {
 			start_time = t;
 
-			/*
-			phase_pattern++;
-			if (phase_pattern == 256) {
-				phase_pattern = 0;
-			}
-			*/
-
 			start_pulse(40000);
-
-			/*
-			f+=10;
-			if (f == 50000) {
-				f = 30000;
-			}
-			*/
 
 			// Wait for end of pulse
 			while (cycle_number != -1) {
@@ -542,7 +567,8 @@ int main(void)
 
 			// Start DMA for ADC
 
-			start_adc();
+			adc_poll_loop_capture();
+			//adc_interrupt_capture();
 
 			int i;
 			uint16_t v;
