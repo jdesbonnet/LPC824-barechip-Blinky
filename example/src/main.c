@@ -1,32 +1,5 @@
 /*
- * @brief Blinky example using SysTick and interrupt
- *
- * @note
- * Copyright(C) NXP Semiconductors, 2013
- * All rights reserved.
- *
- * @par
- * Software that is described herein is for illustrative purposes only
- * which provides customers with programming information regarding the
- * LPC products.  This software is supplied "AS IS" without any warranties of
- * any kind, and NXP Semiconductors and its licensor disclaim any and
- * all warranties, express or implied, including all implied warranties of
- * merchantability, fitness for a particular purpose and non-infringement of
- * intellectual property rights.  NXP Semiconductors assumes no responsibility
- * or liability for the use of the software, conveys no license or rights under any
- * patent, copyright, mask work right, or any other intellectual property rights in
- * or to any products. NXP Semiconductors reserves the right to make changes
- * in the software without notification. NXP Semiconductors also makes no
- * representation or warranty that such application will be suitable for the
- * specified use without further testing or modification.
- *
- * @par
- * Permission to use, copy, modify, and distribute this software and its
- * documentation is hereby granted, under NXP Semiconductors' and its
- * licensor's relevant copyrights in the software, without fee, provided that it
- * is used in conjunction with NXP Semiconductors microcontrollers.  This
- * copyright, permission, and disclaimer notice must appear in all copies of
- * this code.
+
  */
 
 //#include "board.h"
@@ -37,7 +10,7 @@
  * Private types/enumerations/variables
  ****************************************************************************/
 
-#define TICKRATE_HZ (1000)	/* 10 ticks per second */
+#define TICKRATE_HZ (100)
 
 /*****************************************************************************
  * Public types/enumerations/variables
@@ -73,7 +46,7 @@ static const int num_cycles = 8;
 //static const uint8_t phase_pattern = 0x000029a0;
 //static const uint32_t phase_pattern = 0x00008208;
 //static const uint32_t phase_pattern = 0x00000808;
-static const uint32_t phase_pattern = 0x20;
+static uint32_t phase_pattern = 0x0020;
 
 static volatile int32_t cycle_number = -1;
 
@@ -83,7 +56,6 @@ static uint16_t center_freq_period=600;
 
 #define ADC_BUFFER_SIZE 2800
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
-static volatile uint8_t *adc_buffer_ptr;
 static volatile uint32_t adc_count;
 
 /* Size of the source and destination buffers in 32-bit words.
@@ -148,16 +120,6 @@ void SCT_IRQHandler(void)
 		// Pulse is finished. Now switch to using SCT to trigger
 		// ADC samples.
 
-		//Chip_SCTPWM_Stop(LPC_SCT);
-		int half_period = center_freq_period / 2;
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period/10);
-		Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period/10);
-
-		Chip_SCTPWM_SetOutPin(LPC_SCT,
-				2, // PWM channel
-				3 //  the output channel eg SCT_OUT3 (there are 6 in total)
-			);
-
 		// SwitchMatrix: Unassign SCT_OUT0
 		Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 		Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 0xff);
@@ -203,10 +165,8 @@ void ADC_SEQA_IRQHandler(void)
  * @brief ADC overflow interrupt handler.
  */
 void ADC_OVR_IRQHandler(void) {
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, true);
-	//Chip_GPIO_SetPinState(LPC_GPIO_PORT, 0, 14, false);
+	debug_pin_pulse(8);
+	Chip_ADC_ClearFlags(LPC_ADC, 1<<24); // Clear SEQA_OVR
 }
 
 
@@ -257,6 +217,58 @@ static void setupMRT(uint8_t ch, MRT_MODE_T mode, uint32_t rate)
 int __sys_write(int fileh, char *buf, int len) {
 	Chip_UART_SendBlocking(LPC_USART0, buf,len);
 	return len;
+}
+
+/**
+ * Initialize ADC for use.
+ */
+void adc_init () {
+
+	Chip_ADC_Init(LPC_ADC, 0);
+
+	/* Need to do a calibration after initialization and trim */
+	Chip_ADC_StartCalibration(LPC_ADC);
+	while (!(Chip_ADC_IsCalibrationDone(LPC_ADC))) {}
+
+	// Sampling clock rate (not conversion rate). A fully accurate conversion
+	// requires 25 ADC clock cycles.
+	Chip_ADC_SetClockRate(LPC_ADC, 500000 * 25);
+	//Chip_ADC_SetClockRate(LPC_ADC, ADC_MAX_SAMPLE_RATE);
+	Chip_ADC_SetDivider(LPC_ADC,0);
+
+	/* Setup a sequencer to do the following:
+	   Perform ADC conversion of ADC channel 3 only */
+	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
+							(ADC_SEQ_CTRL_CHANSEL(3)
+							| (3<<12) // SCT0_OUT3 see UM10800 §21.3.3
+							| ADC_SEQ_CTRL_MODE_EOS
+							)
+									);
+
+	/* Enable fixed pin ADC3 with SitchMatrix */
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
+	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC3);
+	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC10);
+	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
+
+	/* Clear all pending interrupts */
+	Chip_ADC_ClearFlags(LPC_ADC, Chip_ADC_GetFlags(LPC_ADC));
+
+	/* Enable ADC overrun and sequence A completion interrupts */
+
+	// This has impact on DMA operation. Why?
+	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
+								| ADC_INTEN_OVRRUN_ENABLE
+								));
+
+
+	// ADC interrupt disabled for DMA
+	//NVIC_EnableIRQ(ADC_SEQA_IRQn);
+
+	//NVIC_EnableIRQ(ADC_OVR_IRQn);
+
+	/* Enable sequencer */
+	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
 }
 
 /**
@@ -376,6 +388,45 @@ void start_adc_dma () {
 	debug_pin_pulse(8);
 }
 
+/**
+ * Capture echo data.
+ */
+void start_adc () {
+
+	// Use SCT to time ADC samples. Sample rate 10 * tx freq
+	int half_period = center_freq_period / 2;
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period/10);
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period/10);
+
+	// Using SCT0_OUT3 to trigger ADC sampling
+	Chip_SCTPWM_SetOutPin(LPC_SCT,
+			2, // PWM channel
+			3 //  the output channel eg SCT_OUT3 (there are 6 in total)
+		);
+
+
+	// Tight loop poll to get ADC samples. We sould disable interrupts.
+	int i;
+	debug_pin_pulse(8);
+	//NVIC_EnableIRQ(ADC_OVR_IRQn);
+	for (i = 0; i < ADC_BUFFER_SIZE; i++) {
+		while (LPC_ADC->DR[3] & (1<<31) ) ;
+		//adc_buffer[i] = (LPC_ADC->DR[3] >> 4) & 0xfff;
+		adc_buffer[i] = (uint16_t)LPC_ADC->DR[3];
+		debug_pin_pulse(1);
+	}
+	NVIC_DisableIRQ(ADC_OVR_IRQn);
+	debug_pin_pulse(8);
+
+	// Shift ADC data. We do this outside of capture loop to keep the
+	// capture loop as fast as possible.
+	for (i = 0; i < ADC_BUFFER_SIZE; i++) {
+		adc_buffer[i] >>= 4;
+	}
+
+	// For interrupt method
+	adc_count = 0;
+}
 
 /**
  * @brief	main routine for blinky example
@@ -412,8 +463,6 @@ int main(void)
 	Chip_UART_Enable(LPC_USART0);
 	Chip_UART_TXEnable(LPC_USART0);
 
-	Chip_UART_SendBlocking(LPC_USART0, "Hello!\r\n", 8);
-
 	printf ("System clock rate: %d\r\n", Chip_Clock_GetSystemClockRate());
 
 	/* Initialize GPIO */
@@ -428,56 +477,7 @@ int main(void)
 
 #define ENABLE_ADC
 #ifdef ENABLE_ADC
-	//
-	// ADC
-	//
-
-	Chip_ADC_Init(LPC_ADC, 0);
-
-	/* Need to do a calibration after initialization and trim */
-	Chip_ADC_StartCalibration(LPC_ADC);
-	while (!(Chip_ADC_IsCalibrationDone(LPC_ADC))) {}
-
-	// Sampling clock rate (not conversion rate). A fully accurate conversion
-	// requires 25 ADC clock cycles.
-	Chip_ADC_SetClockRate(LPC_ADC, 500000 * 25);
-	//Chip_ADC_SetClockRate(LPC_ADC, ADC_MAX_SAMPLE_RATE);
-	Chip_ADC_SetDivider(LPC_ADC,0);
-
-	/* Setup a sequencer to do the following:
-	   Perform ADC conversion of ADC channel 3 only */
-	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
-							(ADC_SEQ_CTRL_CHANSEL(3)
-							| (3<<12) // SCT0_OUT3 see UM10800 §21.3.3
-							| ADC_SEQ_CTRL_MODE_EOS
-							)
-									);
-
-	/* Enable fixed pin ADC3 with SitchMatrix */
-	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
-	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC3);
-	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC10);
-	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
-
-	/* Clear all pending interrupts */
-	Chip_ADC_ClearFlags(LPC_ADC, Chip_ADC_GetFlags(LPC_ADC));
-
-	/* Enable ADC overrun and sequence A completion interrupts */
-
-	// This has impact on DMA operation. Why?
-	Chip_ADC_EnableInt(LPC_ADC, (ADC_INTEN_SEQA_ENABLE
-								//| ADC_INTEN_OVRRUN_ENABLE
-								));
-
-
-	// ADC interrupt disabled for DMA
-	//NVIC_EnableIRQ(ADC_SEQA_IRQn);
-
-	//NVIC_EnableIRQ(ADC_OVR_IRQn);
-
-	/* Enable sequencer */
-	Chip_ADC_EnableSequencer(LPC_ADC, ADC_SEQA_IDX);
-
+	adc_init();
 #endif
 
 
@@ -516,55 +516,111 @@ int main(void)
 
 		// Repeat pulse every 100ms
 		t = systick_counter;
-		if ( (cycle_number== -1) && ((t%200)==0) && (t!=start_time) ) {
+		if ( (cycle_number== -1) && ((t%(TICKRATE_HZ/50))==0) && (t!=start_time) ) {
 			start_time = t;
+
+			/*
+			phase_pattern++;
+			if (phase_pattern == 256) {
+				phase_pattern = 0;
+			}
+			*/
+
 			start_pulse(40000);
 
+			/*
+			f+=10;
+			if (f == 50000) {
+				f = 30000;
+			}
+			*/
+
 			// Wait for end of pulse
-			while (cycle_number != -1) {};
+			while (cycle_number != -1) {
+				__WFI();
+			};
 
 			// Start DMA for ADC
-			//dmaDone=false;
-			//start_dma();
+
+			start_adc();
+
 			int i;
+			uint16_t v;
+			uint16_t adc_min = 0xfff;
+			uint16_t adc_max = 0;
+			uint16_t adc_max_index, adc_min_index;
+			uint32_t sum=0;
+			uint64_t sum2=0;
+			uint16_t top_envelope;
+			uint16_t peak_value=0;
+			uint16_t peak_index=0;
 			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				while (LPC_ADC->DR[3] & (1<<31) ) ;
-				adc_buffer[i] = (LPC_ADC->DR[3] >> 4) & 0xfff;
-				debug_pin_pulse(1);
+				v = adc_buffer[i];
+				sum += v;
+				sum2 += v*v;
+				if (v > adc_max) {
+					adc_max = v;
+					adc_max_index = i;
+				}
+				if (v < adc_min) {
+					adc_min = v;
+					adc_min_index = i;
+				}
+
+				// Envelope detector using leaky integrator
+				if (v>top_envelope) {
+					top_envelope = v;
+				} else {
+					top_envelope -= top_envelope/16;
+				}
+
+				if (top_envelope > peak_value) {
+					peak_value = top_envelope;
+					peak_index = i;
+				}
 			}
+			uint16_t mean_value = sum / ADC_BUFFER_SIZE;
+			uint32_t mean_power = sum2 / ADC_BUFFER_SIZE - mean_value*mean_value;
+
+			// Max pulse width in sample periods (about 1ms)
+			const int max_pulse_width = 200;
+			int search_start = peak_index > max_pulse_width ?  peak_index - max_pulse_width : 0;
+			int search_end = peak_index < ADC_BUFFER_SIZE-max_pulse_width ? peak_index+max_pulse_width : ADC_BUFFER_SIZE;
+
+			// Find start of pulse
+			int threshold = peak_value / 2;
+			int echo_start, echo_end;
+			for (i = search_start; i < peak_index; i++) {
+				v = adc_buffer[i];
+				if (v > threshold) {
+					echo_start = i;
+					break;
+				}
+			}
+			for (i = search_end-1; i >= peak_index; i--) {
+				v = adc_buffer[i];
+				if (v > threshold) {
+					echo_end = i;
+					break;
+				}
+			}
+			int pulse_width = echo_end - echo_start;
+
+			/*
+			printf ("%d %d %d %d %d %d %d %d",
+					phase_pattern, mean_power,
+					adc_min, adc_max, adc_max_index,
+					pulse_width,
+					echo_start, echo_end
+					);
+			*/
+
 			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
 				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
 								mime64_encoding_table[adc_buffer[i]&0x3f]);
 			}
+
 			printf ("\r\n");
-		}
-
-		//while (!dmaDone) ;
-
-
-#define DUMP_DMA
-#ifdef DUMP_DMA
-		if (dmaDone) {
-			int i;
-			for (i = 0; i < DMA_BUFFER_SIZE; i++) {
-				printf ("%x ", dst[i]);
-			}
-			printf ("\r\n");
-			dmaDone=false;
-		}
-#endif
-
-		if (adc_count == ADC_BUFFER_SIZE) {
-#define DUMP_DATA
-#ifdef DUMP_DATA
-			int i;
-			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
-								mime64_encoding_table[adc_buffer[i]&0x3f]);
-			}
-			printf ("\r\n");
-#endif
-			adc_count = 0;
 		}
 	}
 }
