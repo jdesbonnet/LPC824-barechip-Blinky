@@ -53,9 +53,22 @@ static volatile int32_t cycle_number = -1;
 // The period (1/f) of the pulse
 static uint16_t center_freq_period=600;
 
+#define BAUD_RATE 460800
 
-#define ADC_BUFFER_SIZE 2800
+#define CAPTURE_ECHO_WAVEFORM
+//#define CAPTURE_ECHO_ENVELOPE
+
+#ifdef CAPTURE_ECHO_ENVELOPE
+#define ADC_CHANNEL 9
+#define ADC_SAMPLE_RATE 20000
+#define ADC_BUFFER_SIZE 500
+#endif
+
+#ifdef CAPTURE_ECHO_WAVEFORM
+#define ADC_CHANNEL 3
 #define ADC_SAMPLE_RATE 240000
+#define ADC_BUFFER_SIZE 2000
+#endif
 
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint32_t adc_count;
@@ -150,10 +163,10 @@ void ADC_SEQA_IRQHandler(void)
 	/* Get pending interrupts */
 	uint32_t pending = Chip_ADC_GetFlags(LPC_ADC);
 
-	debug_pin_pulse(1);
+	//debug_pin_pulse(1);
 
 	//adc_buffer[adc_count++] = (Chip_ADC_GetDataReg(LPC_ADC,3)>>4) & 0xfff;
-	adc_buffer[adc_count++] = Chip_ADC_GetDataReg(LPC_ADC,3);
+	adc_buffer[adc_count++] = Chip_ADC_GetDataReg(LPC_ADC,ADC_CHANNEL);
 
 	if (adc_count == ADC_BUFFER_SIZE) {
 		//NVIC_DisableIRQ(ADC_SEQA_IRQn);
@@ -261,16 +274,16 @@ void adc_init () {
 	/* Setup a sequencer to do the following:
 	   Perform ADC conversion of ADC channel 3 only */
 	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
-							(ADC_SEQ_CTRL_CHANSEL(3)
+							(ADC_SEQ_CTRL_CHANSEL(ADC_CHANNEL)
 							| (3<<12) // SCT0_OUT3 see UM10800 §21.3.3
 							| ADC_SEQ_CTRL_MODE_EOS
 							)
 									);
 
-	/* Enable fixed pin ADC3 with SitchMatrix */
+	/* Enable fixed pin ADC3, ADC9 with SwitchMatrix */
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC3);
-	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC10);
+	Chip_SWM_EnableFixedPin(SWM_FIXED_ADC9);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 	/* Clear all pending interrupts */
@@ -506,10 +519,10 @@ int main(void)
 	Chip_UART_Init(LPC_USART0);
 	Chip_UART_ConfigData(LPC_USART0, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1);
 	//Chip_Clock_SetUSARTNBaseClockRate((115200 * 16), true);
-	Chip_Clock_SetUSARTNBaseClockRate((230400 * 16), true);
+	Chip_Clock_SetUSARTNBaseClockRate((BAUD_RATE * 16), true);
 
 	//Chip_UART_SetBaud(LPC_USART0, 115200);
-	Chip_UART_SetBaud(LPC_USART0, 230400);
+	Chip_UART_SetBaud(LPC_USART0, BAUD_RATE);
 
 	Chip_UART_Enable(LPC_USART0);
 	Chip_UART_TXEnable(LPC_USART0);
@@ -553,9 +566,9 @@ int main(void)
 	while (1) {
 		__WFI();
 
-		// Repeat pulse every 100ms
+		// Repeat pulse at
 		t = systick_counter;
-		if ( (cycle_number== -1) && ((t%(TICKRATE_HZ/50))==0) && (t!=start_time) ) {
+		if ( (cycle_number== -1) && ((t%(TICKRATE_HZ/5))==0) && (t!=start_time) ) {
 			start_time = t;
 
 			start_pulse(40000);
@@ -567,8 +580,11 @@ int main(void)
 
 			// Start DMA for ADC
 
-			adc_poll_loop_capture();
-			//adc_interrupt_capture();
+			//adc_poll_loop_capture();
+			adc_interrupt_capture();
+
+			// Signal that ADC is over (for debugging)
+			debug_pin_pulse(8);
 
 			int i;
 			uint16_t v;
@@ -647,6 +663,9 @@ int main(void)
 			}
 
 			printf ("\r\n");
+
+			// Signal that UART dump is complete
+			debug_pin_pulse(32);
 		}
 	}
 }
