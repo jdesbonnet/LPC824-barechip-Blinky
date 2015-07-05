@@ -77,7 +77,8 @@ static volatile uint32_t adc_count;
    Allowable values  = 128, 256, 512, or 1024 */
 #define DMA_BUFFER_SIZE            (256)
 /* Source and destination buffers */
-uint32_t src[DMA_BUFFER_SIZE], dst[DMA_BUFFER_SIZE];
+//uint32_t src[DMA_BUFFER_SIZE];
+uint32_t dst[DMA_BUFFER_SIZE];
 
 // MIME64 encode
 static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -438,7 +439,7 @@ void adc_dma_capture () {
 	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
 	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
 
-	dmaDesc.dest = DMA_ADDR(&dst[DMA_BUFFER_SIZE - 1]) + 3;
+	dmaDesc.dest = DMA_ADDR(&dst[DMA_BUFFER_SIZE - 1]) ;
 	dmaDesc.next = DMA_ADDR(0);
 
 	/* Enable DMA interrupt */
@@ -654,6 +655,14 @@ int main(void)
 				__WFI();
 			}
 
+			int i;
+
+			for (i =0; i < DMA_BUFFER_SIZE; i++) {
+				printf ("%x ",(dst[i]>>4)&0xfff);
+			}
+			printf ("\r\n");
+			continue;
+
 			// Capture ADC values in tight loop
 			//adc_poll_loop_capture();
 
@@ -662,7 +671,7 @@ int main(void)
 
 
 
-			int i;
+
 			uint16_t v;
 			uint16_t adc_min = 0xfff;
 			uint16_t adc_max = 0;
