@@ -55,8 +55,15 @@ static uint16_t center_freq_period=600;
 
 #define BAUD_RATE 460800
 
+// What to capture
 #define CAPTURE_ECHO_WAVEFORM
 //#define CAPTURE_ECHO_ENVELOPE
+
+// How to capture
+#define CAPTURE_WITH_DMA
+//#define CAPTURE_WITH_LOOP
+//#define CAPTURE_WITH_INTERRUPT
+
 
 #ifdef CAPTURE_ECHO_ENVELOPE
 #define ADC_CHANNEL 9
@@ -66,9 +73,15 @@ static uint16_t center_freq_period=600;
 
 #ifdef CAPTURE_ECHO_WAVEFORM
 #define ADC_CHANNEL 3
+// Tested with up to 720ksps with DMA
 #define ADC_SAMPLE_RATE 240000
-#define ADC_BUFFER_SIZE 2000
+#define ADC_BUFFER_SIZE 2048
 #endif
+
+// Pulse compression technique (PSK180 | CHIRP)
+#define PULSE_COMPRESSION_PSK
+//#define PULSE_COMPRESION_CHIRP
+
 
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 static volatile uint32_t adc_count;
@@ -78,8 +91,8 @@ static volatile uint32_t adc_count;
 #define DMA_BUFFER_SIZE            (1024)
 
 
-// MIME64 encode
-static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+// Base64 encode table
+static char base64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
                                 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
                                 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
                                 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
@@ -110,8 +123,8 @@ void SCT_IRQHandler(void)
 
 	debug_pin_pulse (2);
 
-#define PSK
-#ifdef PSK
+
+#ifdef PULSE_COMPRESSION_PSK
 	int half_period = center_freq_period/2;
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period);
 	if (phase_pattern & (1<<cycle_number) ) {
@@ -122,7 +135,7 @@ void SCT_IRQHandler(void)
 #endif
 
 //#define CHIRP
-#ifdef CHIRP
+#ifdef PULSE_COMPRESSION_CHIRP
 	int half_period = center_freq_period/2;
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, half_period - cycle_number*2);
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0, center_freq_period - cycle_number*4);
@@ -397,7 +410,7 @@ void start_pulse (int freq) {
 }
 
 /**
- * Does not work :(
+ * Capture ADC data using DMA.
  */
 void adc_dma_capture () {
 
@@ -432,11 +445,8 @@ void adc_dma_capture () {
 	/* DMA descriptor for memory to memory operation - note that addresses must
 	   be the END address for src and destination, not the starting address.
 	     DMA operations moves from end to start. */
-	//dmaDesc.source = DMA_ADDR(&src[SIZE_BUFFERS - 1]) + 3;
-	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) ); // ADC data register is source
-	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
-	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
-
+	// ADC data register is source of DMA
+	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
 	dmaDesc.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE - 1]) ;
 	dmaDesc.next = DMA_ADDR(0);
 
@@ -658,8 +668,8 @@ int main(void)
 			for (i =0; i < DMA_BUFFER_SIZE; i++) {
 				//printf ("%x ",(adc_buffer[i]>>4)&0xfff);
 				adc_buffer[i] >>= 4;
-				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
-								mime64_encoding_table[adc_buffer[i]&0x3f]);
+				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
+								base64_encoding_table[adc_buffer[i]&0x3f]);
 			}
 			printf ("\r\n");
 			continue;
@@ -744,8 +754,8 @@ int main(void)
 			*/
 
 			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
-								mime64_encoding_table[adc_buffer[i]&0x3f]);
+				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
+								base64_encoding_table[adc_buffer[i]&0x3f]);
 			}
 
 			printf ("\r\n");
