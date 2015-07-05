@@ -440,33 +440,33 @@ void adc_dma_capture () {
 	// Attempt to use ADC SEQA to trigger DMA xfer
 	Chip_DMATRIGMUX_SetInputTrig(LPC_DMATRIGMUX, DMA_CH0, DMATRIG_ADC_SEQA_IRQ);
 
-	DMA_CHDESC_T dmaDesc;
 
-	/* DMA descriptor for memory to memory operation - note that addresses must
-	   be the END address for src and destination, not the starting address.
-	     DMA operations moves from end to start. */
+	// DMA descriptor for ADC to memory - note that addresses must
+	// be the END address for src and destination, not the starting address.
+	// DMA operations moves from end to start.
+	DMA_CHDESC_T dmaDesc;
 	// ADC data register is source of DMA
 	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
 	dmaDesc.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE - 1]) ;
 	dmaDesc.next = DMA_ADDR(0);
 
-	/* Enable DMA interrupt */
+	// Enable DMA interrupt. Will be invoked at end of DMA transfer.
 	NVIC_EnableIRQ(DMA_IRQn);
 
 	/* Setup transfer descriptor and validate it */
 	Chip_DMA_SetupTranChannel(LPC_DMA, DMA_CH0, &dmaDesc);
 	Chip_DMA_SetValidChannel(LPC_DMA, DMA_CH0);
 
-	/* Setup data transfer and software trigger in same call */
-	// See "Transfer Configuration registers" table 173 §12.6.18 page 179
+	// Setup data transfer and hardware trigger
+	// See "Transfer Configuration registers" UM10800, §12.6.18, Table 173, page 179
 	Chip_DMA_SetupChannelTransfer(LPC_DMA, DMA_CH0,
 			 (
 				DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
-				| DMA_XFERCFG_SETINTA //
+				| DMA_XFERCFG_SETINTA // DMA Interrupt A (A vs B can be read in ISR)
 				//| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
 				| DMA_XFERCFG_WIDTH_16 // 8,16,32 bits allowed
 				| DMA_XFERCFG_SRCINC_0 // do not increment source
-				| DMA_XFERCFG_DSTINC_1 // increment dest by widthx1
+				| DMA_XFERCFG_DSTINC_1 // increment dst by widthx1
 				| DMA_XFERCFG_XFERCOUNT(DMA_BUFFER_SIZE)
 				)
 				);
@@ -483,13 +483,10 @@ void adc_dma_capture () {
 	// Clear SCT0_OUT3 on Event 2 (Event2 configured to occur on Match2)
 	LPC_SCT->OUT[3].CLR = 1 << 2;
 
-	//LPC_SCT->DMAREQ0 = (1<<30) | 1;
-	//DMATRIG_ADC_SEQA_IRQ;
-
 }
 
 /**
- * Capture echo data using tight poll loop.
+ * Capture echo data using tight poll loop. Not working right.
  */
 void adc_poll_loop_capture () {
 
@@ -533,19 +530,10 @@ void adc_interrupt_capture () {
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0,  clock_hz/ADC_SAMPLE_RATE);
 
 	// Using SCT0_OUT3 to trigger ADC sampling
-/*
-	Chip_SCTPWM_SetOutPin(LPC_SCT,
-			2, // PWM channel
-			3 //  the output channel eg SCT_OUT3 (there are 6 in total)
-		);
-*/
-
 	// Set SCT0_OUT3 on Event0 (Event0 configured to occur on Match0)
 	LPC_SCT->OUT[3].SET = 1;
 	// Clear SCT0_OUT3 on Event 2 (Event2 configured to occur on Match2)
 	LPC_SCT->OUT[3].CLR = 1 << 2;
-
-
 
 	adc_count = 0;
 	NVIC_EnableIRQ(ADC_SEQA_IRQn);
@@ -567,6 +555,7 @@ void adc_interrupt_capture () {
 	}
 
 }
+
 /**
  * @brief	main routine for blinky example
  * @return	Function should not exit.
