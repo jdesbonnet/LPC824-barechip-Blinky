@@ -78,7 +78,7 @@ static volatile uint32_t adc_count;
 #define DMA_BUFFER_SIZE            (256)
 /* Source and destination buffers */
 //uint32_t src[DMA_BUFFER_SIZE];
-uint32_t dst[DMA_BUFFER_SIZE];
+uint16_t dst[DMA_BUFFER_SIZE];
 
 // MIME64 encode
 static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -456,7 +456,7 @@ void adc_dma_capture () {
 				DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
 				| DMA_XFERCFG_SETINTA //
 				//| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
-				| DMA_XFERCFG_WIDTH_32 // 8,16,32 bits allowed
+				| DMA_XFERCFG_WIDTH_16 // 8,16,32 bits allowed
 				| DMA_XFERCFG_SRCINC_0 // do not increment source
 				| DMA_XFERCFG_DSTINC_1 // increment dest by widthx1
 				| DMA_XFERCFG_XFERCOUNT(DMA_BUFFER_SIZE)
