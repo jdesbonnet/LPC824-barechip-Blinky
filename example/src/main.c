@@ -75,10 +75,8 @@ static volatile uint32_t adc_count;
 
 /* Size of the source and destination buffers in 32-bit words.
    Allowable values  = 128, 256, 512, or 1024 */
-#define DMA_BUFFER_SIZE            (256)
-/* Source and destination buffers */
-//uint32_t src[DMA_BUFFER_SIZE];
-uint16_t dst[DMA_BUFFER_SIZE];
+#define DMA_BUFFER_SIZE            (1024)
+
 
 // MIME64 encode
 static char mime64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -439,7 +437,7 @@ void adc_dma_capture () {
 	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
 	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
 
-	dmaDesc.dest = DMA_ADDR(&dst[DMA_BUFFER_SIZE - 1]) ;
+	dmaDesc.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE - 1]) ;
 	dmaDesc.next = DMA_ADDR(0);
 
 	/* Enable DMA interrupt */
@@ -658,7 +656,10 @@ int main(void)
 			int i;
 
 			for (i =0; i < DMA_BUFFER_SIZE; i++) {
-				printf ("%x ",(dst[i]>>4)&0xfff);
+				//printf ("%x ",(adc_buffer[i]>>4)&0xfff);
+				adc_buffer[i] >>= 4;
+				printf ("%c%c",mime64_encoding_table[(adc_buffer[i]>>6)&0x3f],
+								mime64_encoding_table[adc_buffer[i]&0x3f]);
 			}
 			printf ("\r\n");
 			continue;
