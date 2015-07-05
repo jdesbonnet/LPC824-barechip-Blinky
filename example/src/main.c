@@ -75,7 +75,7 @@ static uint16_t center_freq_period=600;
 #define ADC_CHANNEL 3
 // Tested with up to 720ksps with DMA
 #define ADC_SAMPLE_RATE 240000
-#define ADC_BUFFER_SIZE 2048
+#define ADC_BUFFER_SIZE 3072
 #endif
 
 // Pulse compression technique (PSK180 | CHIRP)
@@ -409,6 +409,10 @@ void start_pulse (int freq) {
 
 }
 
+DMA_CHDESC_T dmaDesc;
+DMA_CHDESC_T dmaDescB;
+DMA_CHDESC_T dmaDescC;
+
 /**
  * Capture ADC data using DMA.
  */
@@ -444,11 +448,40 @@ void adc_dma_capture () {
 	// DMA descriptor for ADC to memory - note that addresses must
 	// be the END address for src and destination, not the starting address.
 	// DMA operations moves from end to start.
-	DMA_CHDESC_T dmaDesc;
+	dmaDescC.xfercfg = 			 (
+			DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
+			| DMA_XFERCFG_SETINTA // DMA Interrupt A (A vs B can be read in ISR)
+			//| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
+			| DMA_XFERCFG_WIDTH_16 // 8,16,32 bits allowed
+			| DMA_XFERCFG_SRCINC_0 // do not increment source
+			| DMA_XFERCFG_DSTINC_1 // increment dst by widthx1
+			| DMA_XFERCFG_XFERCOUNT(DMA_BUFFER_SIZE)
+			);
+	dmaDescC.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
+	dmaDescC.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE*3 - 1]) ;
+	dmaDescC.next = DMA_ADDR(0);
+
+	dmaDescB.xfercfg = 			 (
+			DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
+			| DMA_XFERCFG_RELOAD  // Causes DMA to move to next descriptor when complete
+			| DMA_XFERCFG_SETINTA // DMA Interrupt A (A vs B can be read in ISR)
+			//| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
+			| DMA_XFERCFG_WIDTH_16 // 8,16,32 bits allowed
+			| DMA_XFERCFG_SRCINC_0 // do not increment source
+			| DMA_XFERCFG_DSTINC_1 // increment dst by widthx1
+			| DMA_XFERCFG_XFERCOUNT(DMA_BUFFER_SIZE)
+			);
+	dmaDescB.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
+	dmaDescB.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE*2 - 1]) ;
+	dmaDescB.next = &dmaDescC;
+
 	// ADC data register is source of DMA
 	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
 	dmaDesc.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE - 1]) ;
-	dmaDesc.next = DMA_ADDR(0);
+	//dmaDesc.next = DMA_ADDR(0);
+	dmaDesc.next = &dmaDescB;
+
+
 
 	// Enable DMA interrupt. Will be invoked at end of DMA transfer.
 	NVIC_EnableIRQ(DMA_IRQn);
@@ -462,6 +495,7 @@ void adc_dma_capture () {
 	Chip_DMA_SetupChannelTransfer(LPC_DMA, DMA_CH0,
 			 (
 				DMA_XFERCFG_CFGVALID  // Channel descriptor is considered valid
+				| DMA_XFERCFG_RELOAD  // Causes DMA to move to next descriptor when complete
 				| DMA_XFERCFG_SETINTA // DMA Interrupt A (A vs B can be read in ISR)
 				//| DMA_XFERCFG_SWTRIG  // When written by software, the trigger for this channel is set immediately.
 				| DMA_XFERCFG_WIDTH_16 // 8,16,32 bits allowed
@@ -654,7 +688,8 @@ int main(void)
 
 			int i;
 
-			for (i =0; i < DMA_BUFFER_SIZE; i++) {
+#ifdef CAPTURE_WITH_DMA
+			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
 				//printf ("%x ",(adc_buffer[i]>>4)&0xfff);
 				adc_buffer[i] >>= 4;
 				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
@@ -662,6 +697,7 @@ int main(void)
 			}
 			printf ("\r\n");
 			continue;
+#endif
 
 			// Capture ADC values in tight loop
 			//adc_poll_loop_capture();
