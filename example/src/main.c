@@ -138,14 +138,24 @@ void SCT_IRQHandler(void)
 		// Pulse is finished. Now switch to using SCT to trigger
 		// ADC samples.
 
-		// SwitchMatrix: Unassign SCT_OUT0
+		// Disable the toggling of the the TX driver pins SCT0_OUT0, SCT0_OUT1
+		// on Event0 or Event2.
+		// This causes slightly different pulse pattern (at start of pulse). Why?
+		//LPC_SCT->OUT[0].SET = 0;
+		//LPC_SCT->OUT[0].CLR = 0;
+		//LPC_SCT->OUT[1].SET = 0;
+		//LPC_SCT->OUT[1].CLR = 0;
+
+		// SwitchMatrix: Unassign TX driver pins SCT_OUT0, SCT_OUT1
 		Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 		Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 0xff);
 		Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 0xff);
 		Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
-		// No need for SCT interrupt for ADC triggering
+		// No need for SCT interrupt during ADC phase.
 		NVIC_DisableIRQ(SCT_IRQn);
+
+		// Signal to main loop that pulse is complete
 		cycle_number=-1;
 	}
 
@@ -501,10 +511,18 @@ void adc_interrupt_capture () {
 	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0,  clock_hz/ADC_SAMPLE_RATE);
 
 	// Using SCT0_OUT3 to trigger ADC sampling
+/*
 	Chip_SCTPWM_SetOutPin(LPC_SCT,
 			2, // PWM channel
 			3 //  the output channel eg SCT_OUT3 (there are 6 in total)
 		);
+*/
+
+	// Set SCT0_OUT3 on Event0 (Event0 configured to occur on Match0)
+	LPC_SCT->OUT[3].SET = 1;
+	// Clear SCT0_OUT3 on Event 2 (Event2 configured to occur on Match2)
+	LPC_SCT->OUT[3].CLR = 1 << 2;
+
 
 
 	adc_count = 0;
