@@ -75,7 +75,7 @@ static volatile uint32_t adc_count;
 
 /* Size of the source and destination buffers in 32-bit words.
    Allowable values  = 128, 256, 512, or 1024 */
-#define DMA_BUFFER_SIZE            (128)
+#define DMA_BUFFER_SIZE            (256)
 /* Source and destination buffers */
 uint32_t src[DMA_BUFFER_SIZE], dst[DMA_BUFFER_SIZE];
 
@@ -206,7 +206,7 @@ static volatile bool dmaDone;
 void DMA_IRQHandler(void)
 {
 
-	debug_pin_pulse (32);
+	debug_pin_pulse (64);
 
 	/* Clear DMA interrupt for the channel */
 	Chip_DMA_ClearActiveIntAChannel(LPC_DMA, DMA_CH0);
@@ -420,7 +420,8 @@ void adc_dma_capture () {
 					//| DMA_CFG_PERIPHREQEN  //?? what's this for???
 					| DMA_CFG_TRIGTYPE_EDGE
 					| DMA_CFG_TRIGPOL_HIGH
-					//| DMA_CFG_BURSTPOWER_1
+					| DMA_CFG_TRIGBURST_BURST
+					| DMA_CFG_BURSTPOWER_1
 					 | DMA_CFG_CHPRIORITY(0)
 					 ));
 
@@ -433,7 +434,7 @@ void adc_dma_capture () {
 	   be the END address for src and destination, not the starting address.
 	     DMA operations moves from end to start. */
 	//dmaDesc.source = DMA_ADDR(&src[SIZE_BUFFERS - 1]) + 3;
-	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[3]) ); // ADC data register is source
+	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) ); // ADC data register is source
 	//dmaDesc.source = DMA_ADDR ( &systick_counter ); // works!
 	//dmaDesc.source = DMA_ADDR ( & LPC_SCT->COUNT_U ); // ADC data register is source
 
@@ -461,9 +462,21 @@ void adc_dma_capture () {
 				)
 				);
 
+
+	// Setup SCT for ADC/DMA sample timing. Additional config was setup in
+	// adc_init()
+	uint32_t clock_hz =  Chip_Clock_GetSystemClockRate();
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_2, (clock_hz/ADC_SAMPLE_RATE)/2 );
+	Chip_SCT_SetMatchReload(LPC_SCT, SCT_MATCH_0,  clock_hz/ADC_SAMPLE_RATE);
+	// Using SCT0_OUT3 to trigger ADC sampling
+	// Set SCT0_OUT3 on Event0 (Event0 configured to occur on Match0)
+	LPC_SCT->OUT[3].SET = 1;
+	// Clear SCT0_OUT3 on Event 2 (Event2 configured to occur on Match2)
+	LPC_SCT->OUT[3].CLR = 1 << 2;
+
+	//LPC_SCT->DMAREQ0 = (1<<30) | 1;
 	//DMATRIG_ADC_SEQA_IRQ;
 
-	debug_pin_pulse(8);
 }
 
 /**
@@ -532,6 +545,10 @@ void adc_interrupt_capture () {
 	while (adc_count < ADC_BUFFER_SIZE) {
 		__WFI();
 	}
+
+	// Signal that ADC is over (for debugging)
+	debug_pin_pulse(64);
+
 
 	// Shift ADC data. We do this outside of the ISR to keep the ISR duration
 	// as short as possible.
@@ -630,13 +647,20 @@ int main(void)
 				__WFI();
 			};
 
-			// Start DMA for ADC
+			// Capture ADC values using DMA
+			dmaDone=false;
+			adc_dma_capture();
+			while (!dmaDone) {
+				__WFI();
+			}
 
+			// Capture ADC values in tight loop
 			//adc_poll_loop_capture();
-			adc_interrupt_capture();
 
-			// Signal that ADC is over (for debugging)
-			debug_pin_pulse(8);
+			// Capture ADC values using ADC ISR (only timing reliable way so far!)
+			//adc_interrupt_capture();
+
+
 
 			int i;
 			uint16_t v;
