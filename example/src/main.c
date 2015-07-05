@@ -74,6 +74,7 @@ static uint16_t center_freq_period=600;
 #ifdef CAPTURE_ECHO_WAVEFORM
 #define ADC_CHANNEL 3
 // Tested with up to 720ksps with DMA
+// 240ksps : 6 samples per 40kHz cycle.
 #define ADC_SAMPLE_RATE 240000
 #define ADC_BUFFER_SIZE 3072
 #endif
@@ -218,7 +219,7 @@ static volatile bool dmaDone;
 void DMA_IRQHandler(void)
 {
 
-	debug_pin_pulse (64);
+	debug_pin_pulse (8);
 
 	/* Clear DMA interrupt for the channel */
 	Chip_DMA_ClearActiveIntAChannel(LPC_DMA, DMA_CH0);
@@ -409,7 +410,7 @@ void start_pulse (int freq) {
 
 }
 
-DMA_CHDESC_T dmaDesc;
+DMA_CHDESC_T dmaDescA;
 DMA_CHDESC_T dmaDescB;
 DMA_CHDESC_T dmaDescC;
 
@@ -444,6 +445,8 @@ void adc_dma_capture () {
 	// Attempt to use ADC SEQA to trigger DMA xfer
 	Chip_DMATRIGMUX_SetInputTrig(LPC_DMATRIGMUX, DMA_CH0, DMATRIG_ADC_SEQA_IRQ);
 
+	// DMA is performed in 3 separate chunks (as max allowed in one transfer
+	// is 1024 words). First to go is dmaDescA followed by B and C.
 
 	// DMA descriptor for ADC to memory - note that addresses must
 	// be the END address for src and destination, not the starting address.
@@ -476,10 +479,10 @@ void adc_dma_capture () {
 	dmaDescB.next = &dmaDescC;
 
 	// ADC data register is source of DMA
-	dmaDesc.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
-	dmaDesc.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE - 1]) ;
+	dmaDescA.source = DMA_ADDR ( (&LPC_ADC->DR[ADC_CHANNEL]) );
+	dmaDescA.dest = DMA_ADDR(&adc_buffer[DMA_BUFFER_SIZE - 1]) ;
 	//dmaDesc.next = DMA_ADDR(0);
-	dmaDesc.next = &dmaDescB;
+	dmaDescA.next = &dmaDescB;
 
 
 
@@ -487,7 +490,7 @@ void adc_dma_capture () {
 	NVIC_EnableIRQ(DMA_IRQn);
 
 	/* Setup transfer descriptor and validate it */
-	Chip_DMA_SetupTranChannel(LPC_DMA, DMA_CH0, &dmaDesc);
+	Chip_DMA_SetupTranChannel(LPC_DMA, DMA_CH0, &dmaDescA);
 	Chip_DMA_SetValidChannel(LPC_DMA, DMA_CH0);
 
 	// Setup data transfer and hardware trigger
@@ -535,7 +538,7 @@ void adc_poll_loop_capture () {
 		);
 
 
-	// Tight loop poll to get ADC samples. We sould disable interrupts.
+	// Tight loop poll to get ADC samples. We should disable interrupts.
 	int i;
 	for (i = 0; i < ADC_BUFFER_SIZE; i++) {
 		while ( LPC_ADC->DR[3] & (1<<31) == 0 ) ;
@@ -686,15 +689,68 @@ int main(void)
 				__WFI();
 			}
 
+			// dmaDone needs to be fixed. Delay instead.
+			int waitUntil = systick_counter+20;
+			while (systick_counter<waitUntil) {
+				__WFI();
+			}
+
 			int i;
 
 #ifdef CAPTURE_WITH_DMA
+
 			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
-				//printf ("%x ",(adc_buffer[i]>>4)&0xfff);
 				adc_buffer[i] >>= 4;
+			}
+
+			// Calculate mean, min, max
+			int adc_mean, adc_min=0xffff, adc_max=0;
+			long sum=0;
+			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
+				if (adc_buffer[i] > adc_max) adc_max = adc_buffer[i];
+				if (adc_buffer[i] < adc_min) adc_min = adc_buffer[i];
+				sum += adc_buffer[i];
+			}
+			adc_mean = sum / (DMA_BUFFER_SIZE*3);
+
+			// Envelope
+			printf ("ENV: ");
+			float top_envelope_f = 0;
+			float v;
+			uint32_t ma[6];
+			int ma_head = 0;
+			int ma_sum = 0;
+			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
+				v = (float)(adc_buffer[i] - adc_mean);
+				if (v > top_envelope_f) {
+					top_envelope_f = v;
+				} else {
+					top_envelope_f -= top_envelope_f * 0.05;
+				}
+				int x = (int)top_envelope_f;
+				if (x < 0) x = 0;
+
+				ma_sum -= ma[ma_head];
+				ma_sum += x;
+
+				ma[ma_head] = x;
+				ma_head++;
+				if (ma_head==6) ma_head = 0;
+
+				if (i%6 == 0) {
+					x = ma_sum/6;
+					x+= adc_mean;
+					printf ("%c%c",base64_encoding_table[(x>>6)&0x3f],
+									base64_encoding_table[x&0x3f]);
+				}
+			}
+			// Waveform
+			printf ("\r\nWAV: ");
+			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
 				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
 								base64_encoding_table[adc_buffer[i]&0x3f]);
 			}
+
 			printf ("\r\n");
 			continue;
 #endif
@@ -708,11 +764,8 @@ int main(void)
 
 
 
-			uint16_t v;
-			uint16_t adc_min = 0xfff;
-			uint16_t adc_max = 0;
+
 			uint16_t adc_max_index, adc_min_index;
-			uint32_t sum=0;
 			uint64_t sum2=0;
 			uint16_t top_envelope;
 			uint16_t peak_value=0;
