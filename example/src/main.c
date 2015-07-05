@@ -141,6 +141,7 @@ void SCT_IRQHandler(void)
 		// SwitchMatrix: Unassign SCT_OUT0
 		Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 		Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 0xff);
+		Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 0xff);
 		Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 		// No need for SCT interrupt for ADC triggering
@@ -272,8 +273,9 @@ void adc_init () {
 	Chip_ADC_SetDivider(LPC_ADC,0);
 
 	/* Setup a sequencer to do the following:
-	   Perform ADC conversion of ADC channel 3 only */
-	Chip_ADC_SetupSequencer(LPC_ADC, ADC_SEQA_IDX,
+	   Perform ADC conversion of ADC channel ADC_CHANNEL only */
+	Chip_ADC_SetupSequencer(LPC_ADC,
+							ADC_SEQA_IDX,
 							(ADC_SEQ_CTRL_CHANSEL(ADC_CHANNEL)
 							| (3<<12) // SCT0_OUT3 see UM10800 §21.3.3
 							| ADC_SEQ_CTRL_MODE_EOS
@@ -315,21 +317,52 @@ void start_pulse (int freq) {
 
 	// Setup SCT
 	Chip_SCT_Init(LPC_SCT);
+
 	/* Stop the SCT before configuration */
 	Chip_SCTPWM_Stop(LPC_SCT);
+
 	/* Set MATCH0 for max limit */
+	// Match/capture mode register. (ref UM10800 section 16.6.11, Table 232, page 273)
+	// Determines if match/capture operate as match or capture. Want all match.
 	LPC_SCT->REGMODE_U = 0;
 
 	cycle_number = 0;
 
-	LPC_SCT->EV[0].CTRL = 1 << 12;
-	LPC_SCT->EV[0].STATE = 1;
 
-	// SCT->EV[2] =
-	Chip_SCTPWM_SetOutPin(SCT_PWM,
-			2, // PWM channel
-			0 //  the output channel eg SCT_OUT3 (there are 6 in total)
-		);
+	// Event 0 control: (ref UM10800 section 16.6.25, Table 247, page 282).
+	// set MATCHSEL (bits 3:0) = MATCH0 register(0)
+	// set COMBMODE (bits 13:12)= MATCH only(1)
+	// So Event0 is triggered on match of MATCH0
+	LPC_SCT->EV[0].CTRL =   (0 << 0 )
+							| 1 << 12;
+	// Event enable register (ref UM10800 section 16.6.24, Table 246, page 281)
+	// Enable Event0 in State0 (default state). We are not using states (I think),
+	// so this enables Event0 in the default State0.
+	// Set STATEMSK0=1
+	LPC_SCT->EV[0].STATE = 1<<0;
+
+
+	// Configure Event2 to be triggered on Match2.
+	int ix = 2;
+	LPC_SCT->EV[ix].CTRL = ix | (1 << 12);
+	LPC_SCT->EV[ix].STATE = 1;
+	LPC_SCT->OUT[0].SET = 1<<0; // Event 0 sets SCT0_OUT[pin]
+	LPC_SCT->OUT[0].CLR = 1<<ix;  // Event ix clears SCT0_OUT[pin]
+
+	// Experimental push-pull driver for ultrasound TX
+	// Want SCT0_OUT1 to be logic NOT of SCT0_OUT0
+	// This is working now (mostly). Start of pulse not
+	// right. Also being triggered by ADC sampling.
+	LPC_SCT->OUT[1].CLR = 1<<0; // Event 0 clears SCT0_OUT1
+	LPC_SCT->OUT[1].SET = 1 << ix;  // Event ix sets SCT0_OUT1
+
+	/* Clear the output in-case of conflict */
+	int pin = 0;
+	LPC_SCT->RES = (LPC_SCT->RES & ~(3 << (pin << 1))) | (0x01 << (pin << 1));
+
+	/* Set and Clear do not depend on direction */
+	LPC_SCT->OUTPUTDIRCTRL = (LPC_SCT->OUTPUTDIRCTRL & ~((3 << (pin << 1))|SCT_OUTPUTDIRCTRL_RESERVED));
+
 
 	/* Set SCT Counter to count 32-bits and reset to 0 after reaching MATCH0 */
 	Chip_SCT_Config(LPC_SCT, SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L);
@@ -346,6 +379,7 @@ void start_pulse (int freq) {
 	// SwitchMatrix: Assign SCT_OUT0 to PIO0_15
 	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_SWM);
 	Chip_SWM_MovablePinAssign(SWM_SCT_OUT0_O, 15);
+	Chip_SWM_MovablePinAssign(SWM_SCT_OUT1_O, 9);
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 
