@@ -632,6 +632,7 @@ int main(void)
 	Chip_UART_TXEnable(LPC_USART0);
 
 	printf ("System clock rate: %d\r\n", Chip_Clock_GetSystemClockRate());
+	printf ("SysTick rate: %d\r\n", TICKRATE_HZ);
 
 	/* Initialize GPIO */
 	Chip_GPIO_Init(LPC_GPIO_PORT);
@@ -666,13 +667,15 @@ int main(void)
 	uint32_t start_time;
 	uint32_t t;
 
+#define PULSE_RATE_HZ 10
+
 	/* Loop forever */
 	while (1) {
 		__WFI();
 
 		// Repeat pulse at
 		t = systick_counter;
-		if ( (cycle_number== -1) && ((t%(TICKRATE_HZ/5))==0) && (t!=start_time) ) {
+		if ( (cycle_number== -1) && ((t%(TICKRATE_HZ/PULSE_RATE_HZ))==0) && (t!=start_time) ) {
 			start_time = t;
 
 			start_pulse(40000);
@@ -682,6 +685,9 @@ int main(void)
 				__WFI();
 			};
 
+
+#ifdef CAPTURE_WITH_DMA
+
 			// Capture ADC values using DMA
 			dmaDone=false;
 			adc_dma_capture();
@@ -690,14 +696,15 @@ int main(void)
 			}
 
 			// dmaDone needs to be fixed. Delay instead.
-			int waitUntil = systick_counter+20;
+			int waitUntil = systick_counter+2;
 			while (systick_counter<waitUntil) {
 				__WFI();
 			}
 
+			debug_pin_pulse(64);
+
 			int i;
 
-#ifdef CAPTURE_WITH_DMA
 
 			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
 				adc_buffer[i] >>= 4;
@@ -714,7 +721,12 @@ int main(void)
 			adc_mean = sum / (DMA_BUFFER_SIZE*3);
 
 			// Envelope
-			printf ("ENV: ");
+			// TODO: Current implementation has 300us gap between
+			// each data point. This must be optimised. Eg use integer
+			// math. At 460800bps each data point (2 Base64 chars/bytes)
+			// takes about 40us to transmit.
+
+			//printf ("ENV: ");
 			float top_envelope_f = 0;
 			float v;
 			uint32_t ma[6];
@@ -739,19 +751,24 @@ int main(void)
 
 				if (i%6 == 0) {
 					x = ma_sum/6;
-					x+= adc_mean;
+					x+= adc_mean; // why does this needed?
 					printf ("%c%c",base64_encoding_table[(x>>6)&0x3f],
 									base64_encoding_table[x&0x3f]);
 				}
 			}
+			printf ("\r\n");
+
+			debug_pin_pulse(64);
+
 			// Waveform
+			/*
 			printf ("\r\nWAV: ");
 			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
 				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
 								base64_encoding_table[adc_buffer[i]&0x3f]);
 			}
-
 			printf ("\r\n");
+			*/
 			continue;
 #endif
 
