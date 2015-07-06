@@ -53,6 +53,7 @@ static volatile int32_t cycle_number = -1;
 // The period (1/f) of the pulse
 static uint16_t center_freq_period=600;
 
+//#define BAUD_RATE 9600
 #define BAUD_RATE 460800
 
 // What to capture
@@ -91,6 +92,11 @@ static volatile uint32_t adc_count;
    Allowable values  = 128, 256, 512, or 1024 */
 #define DMA_BUFFER_SIZE            (1024)
 
+
+#define MODE_WAVEFORM_OUT (1<<0)
+#define MODE_ENVELOPE_OUT (1<<1)
+
+static volatile uint32_t mode_flags = MODE_ENVELOPE_OUT;
 
 // Base64 encode table
 static char base64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -621,16 +627,25 @@ int main(void)
 	Chip_Clock_DisablePeriphClock(SYSCTL_CLOCK_SWM);
 
 	Chip_UART_Init(LPC_USART0);
-	Chip_UART_ConfigData(LPC_USART0, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1);
-	//Chip_Clock_SetUSARTNBaseClockRate((115200 * 16), true);
-	Chip_Clock_SetUSARTNBaseClockRate((BAUD_RATE * 16), true);
+	Chip_UART_ConfigData(LPC_USART0,
+			UART_CFG_DATALEN_8
+			| UART_CFG_PARITY_NONE
+			| UART_CFG_STOPLEN_1);
 
-	//Chip_UART_SetBaud(LPC_USART0, 115200);
+	Chip_Clock_SetUSARTNBaseClockRate((BAUD_RATE * 16), true);
 	Chip_UART_SetBaud(LPC_USART0, BAUD_RATE);
 
-	Chip_UART_Enable(LPC_USART0);
-	Chip_UART_TXEnable(LPC_USART0);
 
+	/* Enable receive data interrupt */
+	Chip_UART_IntEnable(LPC_USART0, UART_INTEN_RXRDY);
+
+	Chip_UART_TXEnable(LPC_USART0);
+	Chip_UART_Enable(LPC_USART0);
+
+	NVIC_EnableIRQ(UART0_IRQn);
+
+
+	// Now that UART is initialized, print hello message
 	printf ("System clock rate: %d\r\n", Chip_Clock_GetSystemClockRate());
 	printf ("SysTick rate: %d\r\n", TICKRATE_HZ);
 
@@ -695,168 +710,92 @@ int main(void)
 				__WFI();
 			}
 
-			// dmaDone needs to be fixed. Delay instead.
+			// TODO: dmaDone needs to be fixed. Delay instead.
 			int waitUntil = systick_counter+2;
 			while (systick_counter<waitUntil) {
 				__WFI();
 			}
 
+#endif
+
 			debug_pin_pulse(64);
 
 			int i;
-
-
 			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
 				adc_buffer[i] >>= 4;
 			}
 
-			// Calculate mean, min, max
-			int adc_mean, adc_min=0xffff, adc_max=0;
-			long sum=0;
-			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
-				if (adc_buffer[i] > adc_max) adc_max = adc_buffer[i];
-				if (adc_buffer[i] < adc_min) adc_min = adc_buffer[i];
-				sum += adc_buffer[i];
-			}
-			adc_mean = sum / (DMA_BUFFER_SIZE*3);
 
-			// Envelope
-			// TODO: Current implementation has 300us gap between
-			// each data point. This must be optimised. Eg use integer
-			// math. At 460800bps each data point (2 Base64 chars/bytes)
-			// takes about 40us to transmit.
+			if (mode_flags & MODE_ENVELOPE_OUT) {
 
-			//printf ("ENV: ");
-			float top_envelope_f = 0;
-			float v;
-			uint32_t ma[6];
-			int ma_head = 0;
-			int ma_sum = 0;
-			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
-				v = (float)(adc_buffer[i] - adc_mean);
-				if (v > top_envelope_f) {
-					top_envelope_f = v;
-				} else {
-					top_envelope_f -= top_envelope_f * 0.05;
+				// Calculate mean, min, max
+				int adc_mean, adc_min = 0xffff, adc_max = 0;
+				long sum = 0;
+				for (i = 0; i < DMA_BUFFER_SIZE * 3; i++) {
+					if (adc_buffer[i] > adc_max)
+						adc_max = adc_buffer[i];
+					if (adc_buffer[i] < adc_min)
+						adc_min = adc_buffer[i];
+					sum += adc_buffer[i];
 				}
-				int x = (int)top_envelope_f;
-				if (x < 0) x = 0;
+				adc_mean = sum / (DMA_BUFFER_SIZE * 3);
 
-				ma_sum -= ma[ma_head];
-				ma_sum += x;
+				// Envelope
+				// TODO: Current implementation has 300us gap between
+				// each data point. This must be optimised. Eg use integer
+				// math. At 460800bps each data point (2 Base64 chars/bytes)
+				// takes about 40us to transmit.
 
-				ma[ma_head] = x;
-				ma_head++;
-				if (ma_head==6) ma_head = 0;
+				printf ("E ");
+				float top_envelope_f = 0;
+				float v;
+				uint32_t ma[6];
+				int ma_head = 0;
+				int ma_sum = 0;
+				for (i = 0; i < DMA_BUFFER_SIZE * 3; i++) {
+					v = (float) (adc_buffer[i] - adc_mean);
+					if (v > top_envelope_f) {
+						top_envelope_f = v;
+					} else {
+						top_envelope_f -= top_envelope_f * 0.05;
+					}
+					int x = (int) top_envelope_f;
+					if (x < 0)
+						x = 0;
 
-				if (i%6 == 0) {
-					x = ma_sum/6;
-					x+= adc_mean; // why does this needed?
-					printf ("%c%c",base64_encoding_table[(x>>6)&0x3f],
-									base64_encoding_table[x&0x3f]);
+					ma_sum -= ma[ma_head];
+					ma_sum += x;
+
+					ma[ma_head] = x;
+					ma_head++;
+					if (ma_head == 6)
+						ma_head = 0;
+
+					if (i % 6 == 0) {
+						x = ma_sum / 6;
+						x += adc_mean; // why does this needed?
+						printf("%c%c", base64_encoding_table[(x >> 6) & 0x3f],
+								base64_encoding_table[x & 0x3f]);
+					}
 				}
+				printf("\r\n");
 			}
-			printf ("\r\n");
+
+			// Waveform
+			if (mode_flags & MODE_WAVEFORM_OUT) {
+				printf ("W ");
+				for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
+					printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
+								base64_encoding_table[adc_buffer[i]&0x3f]);
+				}
+				printf ("\r\n");
+			}
 
 			debug_pin_pulse(64);
 
-			// Waveform
-			/*
-			printf ("\r\nWAV: ");
-			for (i =0; i < DMA_BUFFER_SIZE*3; i++) {
-				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
-								base64_encoding_table[adc_buffer[i]&0x3f]);
-			}
-			printf ("\r\n");
-			*/
-			continue;
-#endif
-
-			// Capture ADC values in tight loop
-			//adc_poll_loop_capture();
-
-			// Capture ADC values using ADC ISR (only timing reliable way so far!)
-			//adc_interrupt_capture();
 
 
 
-
-
-			uint16_t adc_max_index, adc_min_index;
-			uint64_t sum2=0;
-			uint16_t top_envelope;
-			uint16_t peak_value=0;
-			uint16_t peak_index=0;
-			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				v = adc_buffer[i];
-				sum += v;
-				sum2 += v*v;
-				if (v > adc_max) {
-					adc_max = v;
-					adc_max_index = i;
-				}
-				if (v < adc_min) {
-					adc_min = v;
-					adc_min_index = i;
-				}
-
-				// Envelope detector using leaky integrator
-				if (v>top_envelope) {
-					top_envelope = v;
-				} else {
-					top_envelope -= top_envelope/16;
-				}
-
-				if (top_envelope > peak_value) {
-					peak_value = top_envelope;
-					peak_index = i;
-				}
-			}
-			uint16_t mean_value = sum / ADC_BUFFER_SIZE;
-			uint32_t mean_power = sum2 / ADC_BUFFER_SIZE - mean_value*mean_value;
-
-			// Max pulse width in sample periods (about 1ms)
-			const int max_pulse_width = 200;
-			int search_start = peak_index > max_pulse_width ?  peak_index - max_pulse_width : 0;
-			int search_end = peak_index < ADC_BUFFER_SIZE-max_pulse_width ? peak_index+max_pulse_width : ADC_BUFFER_SIZE;
-
-			// Find start of pulse
-			int threshold = peak_value / 2;
-			int echo_start, echo_end;
-			for (i = search_start; i < peak_index; i++) {
-				v = adc_buffer[i];
-				if (v > threshold) {
-					echo_start = i;
-					break;
-				}
-			}
-			for (i = search_end-1; i >= peak_index; i--) {
-				v = adc_buffer[i];
-				if (v > threshold) {
-					echo_end = i;
-					break;
-				}
-			}
-			int pulse_width = echo_end - echo_start;
-
-			/*
-			printf ("%d %d %d %d %d %d %d %d",
-					phase_pattern, mean_power,
-					adc_min, adc_max, adc_max_index,
-					pulse_width,
-					echo_start, echo_end
-					);
-			*/
-
-			for (i = 0; i < ADC_BUFFER_SIZE; i++) {
-				printf ("%c%c",base64_encoding_table[(adc_buffer[i]>>6)&0x3f],
-								base64_encoding_table[adc_buffer[i]&0x3f]);
-			}
-
-			printf ("\r\n");
-
-			// Signal that UART dump is complete
-			debug_pin_pulse(32);
 		}
 	}
 }
@@ -883,3 +822,37 @@ void MRT_IRQHandler(void)
 	}
 
 }
+
+/**
+ * @brief	Handle UART interrupt
+ * @return	Nothing
+ */
+void UART0_IRQHandler(void)
+{
+	uint32_t uart_status = LPC_USART0->STAT;
+
+	// LPC81x: UM10601 §15.6.3, Table 162, p181. USART Status Register.
+	// LPC82x: UM10800 §13.6.3, Table 178, p193.
+	// Bit 0 RXRDY: 1 = data is available to be read from RXDATA
+	// Bit 2 TXRDY: 1 = data may be written to TXDATA
+	if (uart_status & UART_STAT_RXRDY ) {
+		uint8_t c = LPC_USART0->RXDATA;
+		switch (c) {
+		case 'E':
+			mode_flags |= MODE_ENVELOPE_OUT;
+			break;
+		case 'e':
+			mode_flags &= ~MODE_ENVELOPE_OUT;
+			break;
+		case 'W':
+			mode_flags |= MODE_WAVEFORM_OUT;
+			break;
+		case 'w':
+			mode_flags &= ~MODE_WAVEFORM_OUT;
+			break;
+		}
+	} else if (uart_status & UART_STAT_TXRDY ){
+		LPC_USART0->INTENCLR = 1<<2; // TXRDYCLR
+	}
+}
+
