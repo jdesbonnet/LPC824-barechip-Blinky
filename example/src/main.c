@@ -35,6 +35,9 @@ void SysTick_Handler(void)
 	systick_counter++;
 }
 
+// Number of pings per second.
+#define PULSE_RATE_HZ 10
+
 
 // Barker-11: +1 +1 +1 -1 -1 -1 +1 -1 -1 +1 -1
 // Encoded in binary: 111 0001 0010
@@ -95,8 +98,9 @@ static volatile uint32_t adc_count;
 
 #define MODE_WAVEFORM_OUT (1<<0)
 #define MODE_ENVELOPE_OUT (1<<1)
+#define MODE_ENVELOPE_FIXPT_OUT (1<<2)
 
-static volatile uint32_t mode_flags = MODE_ENVELOPE_OUT;
+static volatile uint32_t mode_flags = MODE_ENVELOPE_OUT | MODE_ENVELOPE_FIXPT_OUT;
 
 // Base64 encode table
 static char base64_encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -600,7 +604,127 @@ void adc_interrupt_capture () {
 }
 
 /**
- * @brief	main routine for blinky example
+ * @brief Soft floating point envelope detection.
+ *
+ * Using formula
+ * y(n+1) = x(n) > y(n) ? x(n) : A * y(n)
+ * formula. A = 0.95
+ *
+ * Note: not efficient. Observing about 200us of calculation time for each point.
+ *
+ */
+void envelope_detect_softfloat(int adc_mean) {
+	int i;
+	float top_envelope_f = 0;
+	float v;
+
+	printf("E ");
+
+
+	uint32_t ma[6];
+	int ma_head = 0;
+	int ma_sum = 0;
+	for (i = 0; i < DMA_BUFFER_SIZE * 3; i++) {
+		v = (float) (adc_buffer[i] - adc_mean);
+		if (v > top_envelope_f) {
+			top_envelope_f = v;
+		} else {
+			//top_envelope_f -= top_envelope_f * 0.05;
+			top_envelope_f *= 0.95;
+		}
+		int x = (int) top_envelope_f;
+		if (x < 0) {
+			x = 0;
+		}
+
+		ma_sum -= ma[ma_head];
+		ma_sum += x;
+
+		ma[ma_head] = x;
+		ma_head++;
+		if (ma_head == 6)
+			ma_head = 0;
+
+		if (i % 6 == 0) {
+			x = ma_sum / 6;
+			x += adc_mean; // why does this needed?
+			printf("%c%c", base64_encoding_table[(x >> 6) & 0x3f],
+					base64_encoding_table[x & 0x3f]);
+		}
+	}
+	printf("\r\n");
+}
+
+/**
+ * @brief Fixed point arithmetic envelope detection.
+ *
+ * Using formula
+ * y(n+1) = x(n) > y(n) ? x(n) : A * y(n)
+ * formula. A = 0.95
+ *
+ * Using signed fixed point arithmetic with 8 fractional bits (Q23.8)
+ *
+ * Note: big improvement on soft floating point, with about 100us of calculation time
+ * for each output point.
+ *
+ * Note: currently does not work.
+ *
+ */
+void envelope_detect_fixedpoint(int adc_mean) {
+	int i;
+	uint32_t x,y=0;
+
+	printf("e ");
+
+
+	uint32_t ma[6];
+	int ma_head = 0;
+	int ma_sum = 0;
+	for (i = 0; i < DMA_BUFFER_SIZE * 3; i++) {
+		// Subtract ADC mean
+		x =  (adc_buffer[i] - adc_mean);
+		if (x<0) {
+			x= 0;
+		}
+		x *= 256;
+
+		//y = x > y ? x : y-y>>4;
+		if (x > y) {
+			y = x;
+		} else {
+			// y -= y/16 or floating point equivalent: y *= 0.9375;
+			y -= y>>4;
+		}
+
+		// Moving average of 6 points. Using 6 because there are 6 samples per cycle.
+		// Using 8 would make math more efficient though.
+		ma_sum -= ma[ma_head];
+		ma_sum += y;
+
+		ma[ma_head] = y;
+		ma_head++;
+		if (ma_head == 6) {
+			ma_head = 0;
+		}
+
+		// Was using (i%6==0) but changed to (ma_head==0) which will have the same effect
+		// and saved 30us off the 100us to 70us per envelope output point. And this means
+		// we can range an 10Hz instead of 5Hz. Such a small change makes a big difference! :)
+		if (ma_head == 0) {
+			x = ma_sum / 6;
+			// Convert back to regular integer from fixed point
+			x /= 256;
+			//x += adc_mean; // why does this needed?
+			printf("%c%c", base64_encoding_table[(x >> 6) & 0x3f],
+					base64_encoding_table[x & 0x3f]);
+		}
+	}
+	printf("\r\n");
+}
+
+
+/**
+ * @brief	Main routine for ultrasound experiment.
  * @return	Function should not exit.
  */
 int main(void)
@@ -682,7 +806,8 @@ int main(void)
 	uint32_t start_time;
 	uint32_t t;
 
-#define PULSE_RATE_HZ 10
+	int adc_mean, adc_min = 0xffff, adc_max = 0;
+
 
 	/* Loop forever */
 	while (1) {
@@ -726,10 +851,10 @@ int main(void)
 			}
 
 
-			if (mode_flags & MODE_ENVELOPE_OUT) {
+			if (mode_flags & (MODE_ENVELOPE_OUT | MODE_ENVELOPE_FIXPT_OUT) ) {
 
 				// Calculate mean, min, max
-				int adc_mean, adc_min = 0xffff, adc_max = 0;
+
 				long sum = 0;
 				for (i = 0; i < DMA_BUFFER_SIZE * 3; i++) {
 					if (adc_buffer[i] > adc_max)
@@ -740,45 +865,18 @@ int main(void)
 				}
 				adc_mean = sum / (DMA_BUFFER_SIZE * 3);
 
+			}
 				// Envelope
 				// TODO: Current implementation has 300us gap between
 				// each data point. This must be optimised. Eg use integer
 				// math. At 460800bps each data point (2 Base64 chars/bytes)
 				// takes about 40us to transmit.
 
-				printf ("E ");
-				float top_envelope_f = 0;
-				float v;
-				uint32_t ma[6];
-				int ma_head = 0;
-				int ma_sum = 0;
-				for (i = 0; i < DMA_BUFFER_SIZE * 3; i++) {
-					v = (float) (adc_buffer[i] - adc_mean);
-					if (v > top_envelope_f) {
-						top_envelope_f = v;
-					} else {
-						top_envelope_f -= top_envelope_f * 0.05;
-					}
-					int x = (int) top_envelope_f;
-					if (x < 0)
-						x = 0;
-
-					ma_sum -= ma[ma_head];
-					ma_sum += x;
-
-					ma[ma_head] = x;
-					ma_head++;
-					if (ma_head == 6)
-						ma_head = 0;
-
-					if (i % 6 == 0) {
-						x = ma_sum / 6;
-						x += adc_mean; // why does this needed?
-						printf("%c%c", base64_encoding_table[(x >> 6) & 0x3f],
-								base64_encoding_table[x & 0x3f]);
-					}
-				}
-				printf("\r\n");
+			if (mode_flags & MODE_ENVELOPE_OUT) {
+				envelope_detect_softfloat(adc_mean);
+			}
+			if (mode_flags & MODE_ENVELOPE_FIXPT_OUT) {
+				envelope_detect_fixedpoint(adc_mean);
 			}
 
 			// Waveform
@@ -849,6 +947,12 @@ void UART0_IRQHandler(void)
 			break;
 		case 'w':
 			mode_flags &= ~MODE_WAVEFORM_OUT;
+			break;
+		case 'I':
+			mode_flags |= MODE_ENVELOPE_FIXPT_OUT;
+			break;
+		case 'i':
+			mode_flags &= ~MODE_ENVELOPE_FIXPT_OUT;
 			break;
 		}
 	} else if (uart_status & UART_STAT_TXRDY ){
