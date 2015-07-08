@@ -667,6 +667,44 @@ void envelope_detect_softfloat(int adc_mean) {
  * Note: big improvement on soft floating point, with about 100us of calculation time
  * for each output point.
  *
+ */
+void envelope_detect_peakdetect(int adc_mean) {
+	int i,j=0;
+	uint32_t y=0;
+
+	printf("e ");
+
+	for (i = 1; i < DMA_BUFFER_SIZE * 3 -1; i++) {
+
+		if (adc_buffer[i] > adc_mean) {
+			if (adc_buffer[i-1] < adc_buffer[i] && adc_buffer[i] > adc_buffer[i+1]) {
+				// Peak
+				y = adc_buffer[i];
+			}
+		}
+
+		if (++j == 6) {
+			printf("%c%c", base64_encoding_table[(y >> 6) & 0x3f],
+					base64_encoding_table[y & 0x3f]);
+			j = 0;
+		}
+	}
+	printf("\r\n");
+}
+
+
+/**
+ * @brief Fixed point arithmetic envelope detection.
+ *
+ * Using formula
+ * y(n+1) = x(n) > y(n) ? x(n) : A * y(n)
+ * formula. A = 0.95
+ *
+ * Using signed fixed point arithmetic with 8 fractional bits (Q23.8)
+ *
+ * Note: big improvement on soft floating point, with about 100us of calculation time
+ * for each output point.
+ *
  * Note: currently does not work.
  *
  */
@@ -876,7 +914,8 @@ int main(void)
 				envelope_detect_softfloat(adc_mean);
 			}
 			if (mode_flags & MODE_ENVELOPE_FIXPT_OUT) {
-				envelope_detect_fixedpoint(adc_mean);
+				//envelope_detect_fixedpoint(adc_mean);
+				envelope_detect_peakdetect(adc_mean);
 			}
 
 			// Waveform
