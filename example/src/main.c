@@ -656,16 +656,9 @@ void envelope_detect_softfloat(int adc_mean) {
 }
 
 /**
- * @brief Fixed point arithmetic envelope detection.
+ * @brief Envelope detection using peak detection.
  *
- * Using formula
- * y(n+1) = x(n) > y(n) ? x(n) : A * y(n)
- * formula. A = 0.95
- *
- * Using signed fixed point arithmetic with 8 fractional bits (Q23.8)
- *
- * Note: big improvement on soft floating point, with about 100us of calculation time
- * for each output point.
+ * Relies on a reasonable number of samples per cycle
  *
  */
 void envelope_detect_peakdetect(int adc_mean) {
